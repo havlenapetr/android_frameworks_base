@@ -59,8 +59,7 @@ LOCAL_SHARED_LIBRARIES := \
         libcutils         \
         libui             \
         libsonivox        \
-        libvorbisidec     \
-        libFLAC
+        libvorbisidec
 
 ifneq ($(BOARD_USES_ECLAIR_LIBCAMERA),true)
     LOCAL_SHARED_LIBRARIES += \
