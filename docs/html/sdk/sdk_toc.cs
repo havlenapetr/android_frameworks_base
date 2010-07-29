@@ -75,7 +75,8 @@
       </li>
     </ul>
     <ul>
-      <li><a href="<?cs var:toroot ?>sdk/tools-notes.html">SDK Tools, r6</a> <span class="new">new!</span></li>
+      <li><a href="<?cs var:toroot ?>sdk/tools-notes.html">SDK Tools, r6</a>
+      </li>
       <li><a href="<?cs var:toroot ?>sdk/win-usb.html">USB Driver for
       Windows, r3</a>
       </li>
@@ -101,7 +102,6 @@
       <span style="display:none" class="ja"></span>
       <span style="display:none" class="zh-CN"></span>
       <span style="display:none" class="zh-TW"></span></a>
-        <span class="new">new!</span>
       </li>
     </ul>
   </li>
@@ -116,7 +116,7 @@
       <span style="display:none" class="zh-TW"></span>
     </h2>
     <ul>
-      <li><a href="<?cs var:toroot ?>sdk/ndk/index.html">Android NDK, r4</a>
+      <li><a href="<?cs var:toroot ?>sdk/ndk/index.html">Android NDK, r4b</a>
       <span class="new">new!</span></li>
     </ul>
   </li>
@@ -133,7 +133,6 @@
     </h2>
     <ul>
       <li><a href="<?cs var:toroot ?>sdk/requirements.html">SDK System Requirements</a></li>
-      <li><a href="<?cs var:toroot ?>sdk/terms.html">SDK Terms and Conditions</a></li>
       <!-- <li><a href="<?cs var:toroot ?>sdk/RELEASENOTES.html">SDK Release
             Notes</a></li> -->
       <li><a href="<?cs var:toroot ?>sdk/older_releases.html">SDK

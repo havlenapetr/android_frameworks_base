@@ -527,7 +527,7 @@ Marking a project as an Android library project. </p>
 <p>A library project's manifest file must declare all of the shared components
 that it includes, just as would a standard Android application. For more
 information, see the documentation for <a
-href="{@docRoot}guide/manifest/manifest-intro.html">AndroidManifest.xml</a>.</p>
+href="{@docRoot}guide/topics/manifest/manifest-intro.html">AndroidManifest.xml</a>.</p>
 
 <p>For example, the <a
 href="{@docRoot}resources/samples/TicTacToeLib/AndroidManifest.html">TicTacToeLib</a>
@@ -613,7 +613,8 @@ like this: </p>
   ...
 &lt;/manifest&gt;</pre>
 
-<p>For more information about the manifest file, see the documentation for <a href="{@docRoot}guide/manifest/manifest-intro.html">AndroidManifest.xml</a>.</p>
+<p>For more information about the manifest file, see the documentation for <a
+href="{@docRoot}guide/topics/manifest/manifest-intro.html">AndroidManifest.xml</a>.</p>
 
 
 <h3 id="considerations">Development considerations</h3>
@@ -782,6 +783,8 @@ library project through a relative link.</p>
 <p>Although the recommended way to debug is to use the ADT plugin, you can manually run 
 DDMS and configure Eclipse to debug on port 8700. (<strong>Note: </strong>Be sure that you 
 have first started <a href="{@docRoot}guide/developing/tools/ddms.html">DDMS</a>). </p>
+
+
 
 
 <!-- TODO: clean this up and expand it to cover more wizards and features
