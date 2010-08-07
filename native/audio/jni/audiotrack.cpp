@@ -54,18 +54,12 @@ static bool allocSharedMem(int sizeInBytes) {
 }
 */
 
-int AndroidAudioTrack_register(JNIEnv* env, jobject jaudioTrack) {
+int AndroidAudioTrack_register() {
 	__android_log_print(ANDROID_LOG_INFO, TAG, "registering audio track");
-	track = getNativeAudioTrack(env, jaudioTrack);
+	track = new AudioTrack();
 	if(track == NULL) {
 	     return ANDROID_AUDIOTRACK_RESULT_JNI_EXCEPTION;
 	}
-	if (track->sharedBuffer() != 0) {
-		__android_log_print(ANDROID_LOG_INFO, TAG, "** sharedBuffer isn't null **");
-	} else {
-		__android_log_print(ANDROID_LOG_INFO, TAG, "** sharedBuffer is null **");
-	}
-
 	__android_log_print(ANDROID_LOG_INFO, TAG, "registered");
 	return ANDROID_AUDIOTRACK_RESULT_SUCCESS;
 }
@@ -82,36 +76,13 @@ int AndroidAudioTrack_start() {
 int AndroidAudioTrack_set(int streamType,
 						  uint32_t sampleRate,
 						  int format,
-						  int channels,
-						  int buffSizeInBytes) {
+						  int channels) {
 	if(track == NULL) {
         return ANDROID_AUDIOTRACK_RESULT_ALLOCATION_FAILED;
     }
 	
-	/*
 	__android_log_print(ANDROID_LOG_INFO, TAG, "setting audio track");
 	
-	if(buffSizeInBytes > 0) {
-		__android_log_print(ANDROID_LOG_INFO, TAG, "allocating shared buffer");
-		if(!allocSharedMem(buffSizeInBytes)) {
-			__android_log_print(ANDROID_LOG_INFO, TAG, "can't allocate shared buffer");
-			return ANDROID_AUDIOTRACK_RESULT_ALLOCATION_FAILED;
-		}
-	}
-	
-	/*
-	int nbChannels = AudioSystem::popCount(channels);
-	int bytesPerSample = format == PCM_16_BIT ? 2 : 1;
-	int frameCount = buffSizeInBytes / (nbChannels * bytesPerSample);
-	
-	sp<IMemory> sharedBuffer = &memBase;
-	if (sharedBuffer == 0) {
-		__android_log_print(ANDROID_LOG_INFO, TAG, "sharefBuffer is 0");
-	}
-	
-	//__android_log_print(ANDROID_LOG_INFO, TAG, 
-	//					"sharedBuffer: %p, size: %d", memBase.pointer(), memBase.size());
-
 	status_t ret = track->set(streamType, 
 							  sampleRate, 
 							  format, 
@@ -119,17 +90,12 @@ int AndroidAudioTrack_set(int streamType,
 							  0, 
 							  0,
 							  0, 
-							  &memBase,
+							  0,
 							  false);
-	if (track->sharedBuffer() == 0) {
-		__android_log_print(ANDROID_LOG_INFO, TAG, "sharedBuffer is %i", &track->sharedBuffer());
-	}
 	
 	if (ret != NO_ERROR) {
 		return ANDROID_AUDIOTRACK_RESULT_ERRNO;
 	}
-	
-	*/
 	return ANDROID_AUDIOTRACK_RESULT_SUCCESS;
 }
 
@@ -166,7 +132,7 @@ int AndroidAudioTrack_unregister() {
     }
 	//memBase.clear();
 	//memHeap.clear();
-	//free(track);
+	free(track);
 	//track = NULL;
 	__android_log_print(ANDROID_LOG_INFO, TAG, "unregistered");
     return ANDROID_AUDIOTRACK_RESULT_SUCCESS;

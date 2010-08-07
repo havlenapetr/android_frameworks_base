@@ -10,8 +10,6 @@ LOCAL_SRC_FILES:= \
 
 LOCAL_MODULE:= libcamera_client
 
-ifneq ($(BOARD_USES_ECLAIR_LIBCAMERA),true)
-
 LOCAL_SHARED_LIBRARIES := \
 	libcutils \
 	libutils \
@@ -25,9 +23,3 @@ ifeq ($(TARGET_SIMULATOR),true)
 endif
 
 include $(BUILD_SHARED_LIBRARY)
-
-else
-
-include $(BUILD_STATIC_LIBRARY)
-
-endif
