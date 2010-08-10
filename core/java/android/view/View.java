@@ -1514,11 +1514,38 @@ public class View implements Drawable.Callback, KeyEvent.Callback, Accessibility
     static final int CANCEL_NEXT_UP_EVENT = 0x04000000;
     
     /**
-     * Indicates that we should awaken scroll bars once attached
+     * Always allow a user to overscroll this view, provided it is a
+     * view that can scroll.
      * 
-     * @hide
+     * @see #getOverscrollMode()
+     * @see #setOverscrollMode(int)
      */
-    private static final int AWAKEN_SCROLL_BARS_ON_ATTACH = 0x08000000;
+    public static final int OVERSCROLL_ALWAYS = 0;
+    
+    /**
+     * Allow a user to overscroll this view only if the content is large
+     * enough to meaningfully scroll, provided it is a view that can scroll.
+     * 
+     * @see #getOverscrollMode()
+     * @see #setOverscrollMode(int)
+     */
+    public static final int OVERSCROLL_IF_CONTENT_SCROLLS = 1;
+    
+    /**
+     * Never allow a user to overscroll this view.
+     * 
+     * @see #getOverscrollMode()
+     * @see #setOverscrollMode(int)
+     */
+    public static final int OVERSCROLL_NEVER = 2;
+    
+    /**
+     * Controls the overscroll mode for this view.
+     * See {@link #overscrollBy(int, int, int, int, int, int, int, int, boolean)},
+     * {@link #OVERSCROLL_ALWAYS}, {@link #OVERSCROLL_IF_CONTENT_SCROLLS},
+     * and {@link #OVERSCROLL_NEVER}.
+     */
+    private int mOverscrollMode = OVERSCROLL_ALWAYS;
 
     /**
      * The parent this view is attached to.
@@ -2075,6 +2102,9 @@ public class View implements Drawable.Callback, KeyEvent.Callback, Accessibility
                             }
                         });
                     }
+                    break;
+                case R.styleable.View_overscrollMode:
+                    mOverscrollMode = a.getInt(attr, OVERSCROLL_ALWAYS);
                     break;
             }
         }
@@ -3845,13 +3875,6 @@ public class View implements Drawable.Callback, KeyEvent.Callback, Accessibility
      * {@link #INVISIBLE} or {@link #GONE}.
      */
     protected void onVisibilityChanged(View changedView, int visibility) {
-        if (visibility == VISIBLE) {
-            if (mAttachInfo != null) {
-                initialAwakenScrollBars();
-            } else {
-                mPrivateFlags |= AWAKEN_SCROLL_BARS_ON_ATTACH;
-            }
-        }
     }
 
     /**
@@ -3902,9 +3925,6 @@ public class View implements Drawable.Callback, KeyEvent.Callback, Accessibility
      * @param visibility The new visibility of the window.
      */
     protected void onWindowVisibilityChanged(int visibility) {
-        if (visibility == VISIBLE) {
-            initialAwakenScrollBars();
-        }
     }
 
     /**
@@ -4926,19 +4946,6 @@ public class View implements Drawable.Callback, KeyEvent.Callback, Accessibility
     }
 
     /**
-     * Trigger the scrollbars to draw.
-     * This method differs from awakenScrollBars() only in its default duration.
-     * initialAwakenScrollBars() will show the scroll bars for longer than
-     * usual to give the user more of a chance to notice them.
-     *
-     * @return true if the animation is played, false otherwise.
-     */
-    private boolean initialAwakenScrollBars() {
-        return mScrollCache != null &&
-                awakenScrollBars(mScrollCache.scrollBarDefaultDelayBeforeFade * 4, true);
-    }
-
-    /**
      * <p>
      * Trigger the scrollbars to draw. When invoked this method starts an
      * animation to fade the scrollbars out after a fixed delay. If a subclass
@@ -5929,10 +5936,6 @@ public class View implements Drawable.Callback, KeyEvent.Callback, Accessibility
     protected void onAttachedToWindow() {
         if ((mPrivateFlags & REQUEST_TRANSPARENT_REGIONS) != 0) {
             mParent.requestTransparentRegion(this);
-        }
-        if ((mPrivateFlags & AWAKEN_SCROLL_BARS_ON_ATTACH) != 0) {
-            initialAwakenScrollBars();
-            mPrivateFlags &= ~AWAKEN_SCROLL_BARS_ON_ATTACH;
         }
     }
 
@@ -7890,9 +7893,7 @@ public class View implements Drawable.Callback, KeyEvent.Callback, Accessibility
      * without resorting to another data structure.
      *
      * The specified key should be an id declared in the resources of the
-     * application to ensure it is unique (see the <a
-     * href={@docRoot}guide/topics/resources/more-resources.html#Id">ID resource type</a>).
-     * Keys identified as belonging to
+     * application to ensure it is unique. Keys identified as belonging to
      * the Android framework or not associated with any package will cause
      * an {@link IllegalArgumentException} to be thrown.
      *
@@ -8665,6 +8666,161 @@ public class View implements Drawable.Callback, KeyEvent.Callback, Accessibility
     public static View inflate(Context context, int resource, ViewGroup root) {
         LayoutInflater factory = LayoutInflater.from(context);
         return factory.inflate(resource, root);
+    }
+    
+    /**
+     * Scroll the view with standard behavior for scrolling beyond the normal
+     * content boundaries. Views that call this method should override
+     * {@link #onOverscrolled(int, int, boolean, boolean)} to respond to the
+     * results of an overscroll operation.
+     * 
+     * Views can use this method to handle any touch or fling-based scrolling.
+     * 
+     * @param deltaX Change in X in pixels 
+     * @param deltaY Change in Y in pixels
+     * @param scrollX Current X scroll value in pixels before applying deltaX
+     * @param scrollY Current Y scroll value in pixels before applying deltaY
+     * @param scrollRangeX Maximum content scroll range along the X axis
+     * @param scrollRangeY Maximum content scroll range along the Y axis
+     * @param maxOverscrollX Number of pixels to overscroll by in either direction
+     *          along the X axis.
+     * @param maxOverscrollY Number of pixels to overscroll by in either direction
+     *          along the Y axis.
+     * @param isTouchEvent true if this scroll operation is the result of a touch event.
+     * @return true if scrolling was clamped to an overscroll boundary along either
+     *          axis, false otherwise.
+     */
+    protected boolean overscrollBy(int deltaX, int deltaY,
+            int scrollX, int scrollY,
+            int scrollRangeX, int scrollRangeY,
+            int maxOverscrollX, int maxOverscrollY,
+            boolean isTouchEvent) {
+        final int overscrollMode = mOverscrollMode;
+        final boolean canScrollHorizontal = 
+                computeHorizontalScrollRange() > computeHorizontalScrollExtent();
+        final boolean canScrollVertical = 
+                computeVerticalScrollRange() > computeVerticalScrollExtent();
+        final boolean overscrollHorizontal = overscrollMode == OVERSCROLL_ALWAYS ||
+                (overscrollMode == OVERSCROLL_IF_CONTENT_SCROLLS && canScrollHorizontal);
+        final boolean overscrollVertical = overscrollMode == OVERSCROLL_ALWAYS ||
+                (overscrollMode == OVERSCROLL_IF_CONTENT_SCROLLS && canScrollVertical);
+        
+        int newScrollX = scrollX + deltaX;
+        if (overscrollHorizontal) {
+            // Scale the scroll amount if we're in the dropoff zone
+            final int dropoffX = maxOverscrollX / 2;
+            final int dropoffLeft = -dropoffX;
+            final int dropoffRight = dropoffX + scrollRangeX;
+            if ((scrollX < dropoffLeft && deltaX < 0) ||
+                    (scrollX > dropoffRight && deltaX > 0)) {
+                newScrollX = scrollX + deltaX / 2;
+            } else {
+                if (newScrollX > dropoffRight && deltaX > 0) {
+                    int extra = newScrollX - dropoffRight;
+                    newScrollX = dropoffRight + extra / 2;
+                } else if (newScrollX < dropoffLeft && deltaX < 0) {
+                    int extra = newScrollX - dropoffLeft;
+                    newScrollX = dropoffLeft + extra / 2;
+                }
+            }
+        } else {
+            maxOverscrollX = 0;
+        }
+
+        int newScrollY = scrollY + deltaY;
+        if (overscrollVertical) {
+            final int dropoffY = maxOverscrollY / 2;
+            final int dropoffTop = -dropoffY;
+            final int dropoffBottom = dropoffY + scrollRangeY;
+            if ((scrollY < dropoffTop && deltaY < 0) ||
+                    (scrollY > dropoffBottom && deltaY > 0)) {
+                newScrollY = scrollY + deltaY / 2;
+            } else {
+                if (newScrollY > dropoffBottom && deltaY > 0) {
+                    int extra = newScrollY - dropoffBottom;
+                    newScrollY = dropoffBottom + extra / 2;
+                } else if (newScrollY < dropoffTop && deltaY < 0) {
+                    int extra = newScrollY - dropoffTop;
+                    newScrollY = dropoffTop + extra / 2;
+                }
+            }
+        } else {
+            maxOverscrollY = 0;
+        }
+        
+        // Clamp values if at the limits and record
+        final int left = -maxOverscrollX;
+        final int right = maxOverscrollX + scrollRangeX;
+        final int top = -maxOverscrollY;
+        final int bottom = maxOverscrollY + scrollRangeY;
+
+        boolean clampedX = false;
+        if (newScrollX > right) {
+            newScrollX = right;
+            clampedX = true;
+        } else if (newScrollX < left) {
+            newScrollX = left;
+            clampedX = true;
+        }
+        
+        boolean clampedY = false;
+        if (newScrollY > bottom) {
+            newScrollY = bottom;
+            clampedY = true;
+        } else if (newScrollY < top) {
+            newScrollY = top;
+            clampedY = true;
+        }
+
+        onOverscrolled(newScrollX, newScrollY, clampedX, clampedY);
+        
+        return clampedX || clampedY;
+    }
+    
+    /**
+     * Called by {@link #overscrollBy(int, int, int, int, int, int, int, int, boolean)} to
+     * respond to the results of an overscroll operation.
+     * 
+     * @param scrollX New X scroll value in pixels
+     * @param scrollY New Y scroll value in pixels
+     * @param clampedX True if scrollX was clamped to an overscroll boundary
+     * @param clampedY True if scrollY was clamped to an overscroll boundary
+     */
+    protected void onOverscrolled(int scrollX, int scrollY,
+            boolean clampedX, boolean clampedY) {
+        // Intentionally empty.
+    }
+    
+    /**
+     * Returns the overscroll mode for this view. The result will be
+     * one of {@link #OVERSCROLL_ALWAYS} (default), {@link #OVERSCROLL_IF_CONTENT_SCROLLS}
+     * (allow overscrolling only if the view content is larger than the container),
+     * or {@link #OVERSCROLL_NEVER}.
+     * 
+     * @return This view's overscroll mode.
+     */
+    public int getOverscrollMode() {
+        return mOverscrollMode;
+    }
+    
+    /**
+     * Set the overscroll mode for this view. Valid overscroll modes are
+     * {@link #OVERSCROLL_ALWAYS} (default), {@link #OVERSCROLL_IF_CONTENT_SCROLLS}
+     * (allow overscrolling only if the view content is larger than the container),
+     * or {@link #OVERSCROLL_NEVER}.
+     * 
+     * Setting the overscroll mode of a view will have an effect only if the
+     * view is capable of scrolling.
+     * 
+     * @param overscrollMode The new overscroll mode for this view.
+     */
+    public void setOverscrollMode(int overscrollMode) {
+        if (overscrollMode != OVERSCROLL_ALWAYS &&
+                overscrollMode != OVERSCROLL_IF_CONTENT_SCROLLS &&
+                overscrollMode != OVERSCROLL_NEVER) {
+            throw new IllegalArgumentException("Invalid overscroll mode " + overscrollMode);
+        }
+        mOverscrollMode = overscrollMode;
     }
 
     /**
