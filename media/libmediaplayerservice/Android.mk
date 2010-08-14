@@ -41,12 +41,8 @@ LOCAL_SHARED_LIBRARIES :=     		\
 	libandroid_runtime    			\
 	libstagefright        			\
 	libstagefright_omx    			\
-	libstagefright_color_conversion
-
-ifneq ($(BOARD_USES_ECLAIR_LIBCAMERA),true)
-    LOCAL_SHARED_LIBRARIES += \
-    	libsurfaceflinger_client
-endif
+	libstagefright_color_conversion         \
+	libsurfaceflinger_client
 
 ifneq ($(BUILD_WITHOUT_PV),true)
 LOCAL_SHARED_LIBRARIES += \

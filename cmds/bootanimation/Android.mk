@@ -15,18 +15,14 @@ endif
 LOCAL_CFLAGS += -DGL_GLEXT_PROTOTYPES -DEGL_EGLEXT_PROTOTYPES
 
 LOCAL_SHARED_LIBRARIES := \
-	libcutils \
-	libutils \
-	libbinder \
+    libcutils \
+    libutils \
+    libbinder \
     libui \
-	libskia \
+    libskia \
     libEGL \
-    libGLESv1_CM
-    
-ifneq ($(BOARD_USES_ECLAIR_LIBCAMERA),true)
-    LOCAL_SHARED_LIBRARIES += \
-    	libsurfaceflinger_client
-endif
+    libGLESv1_CM \
+    libsurfaceflinger_client
 
 LOCAL_C_INCLUDES := \
 	$(call include-path-for, corecg graphics)
