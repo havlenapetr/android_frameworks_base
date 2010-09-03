@@ -117,6 +117,7 @@ LOCAL_SRC_FILES:= \
 	android_bluetooth_BluetoothAudioGateway.cpp \
 	android_bluetooth_BluetoothSocket.cpp \
 	android_bluetooth_ScoSocket.cpp \
+	android_server_VNCService.cpp \
 	android_server_BluetoothService.cpp \
 	android_server_BluetoothEventLoop.cpp \
 	android_server_BluetoothA2dpService.cpp \

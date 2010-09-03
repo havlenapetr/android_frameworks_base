@@ -44,7 +44,9 @@ import android.server.search.SearchManagerService;
 import android.util.EventLog;
 import android.util.Slog;
 import android.accounts.AccountManagerService;
+import android.server.VNCService;
 
+import java.io.IOException;
 import java.io.File;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -268,6 +270,14 @@ class ServerThread extends Thread {
             } catch (Throwable e) {
                 Slog.e(TAG, "Failure starting Connectivity Service", e);
             }
+			
+			try {
+				Slog.i(TAG, "Remote desktop Service");
+				ServiceManager.addService(VNCService.RDESKTOP_SERVICE_NAME, new VNCService(context));
+			}
+			catch (IOException ex) {
+				Slog.e(TAG, "Couldn't init rdesktop service: " + ex.getMessage());
+			}
 
             try {
                 Slog.i(TAG, "Throttle Service");
