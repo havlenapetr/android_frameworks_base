@@ -95,7 +95,88 @@ padding: .25em 1em;
 }
 </style>
 
+
 <div class="toggleable opened">
+  <a href="#" onclick="return toggleDiv(this)">
+        <img src="{@docRoot}assets/images/triangle-opened.png" class="toggle-img" height="9px" width="9px" />
+ADT 0.9.9</a> <em>(September 2010)</em>
+  <div class="toggleme">
+
+
+</ul>
+</dd>
+
+<dl>
+
+<dt>Dependencies:</dt>
+
+<dd><p>ADT 0.9.9 replaces ADT 0.9.8 and is designed for use with SDK Tools r7
+and later. ADT 0.9.9 includes the ADT 0.9.8 features as well as an important
+bugfix, so we recommend that you upgrade as soon as possible. If you haven't
+already installed SDK Tools r7 into your SDK, use the Android SDK Manager to do
+so.</p></dd>
+
+<dt>General notes:</dt>
+<dd>
+<ul>
+<li>Fixes a problem in project import, in which source files were deleted in some cases.</li>
+<li>Includes all other ADT 0.9.8 features (see below).</li>
+</ul>
+</dd>
+</dl>
+ </div>
+</div>
+
+<div class="toggleable closed">
+  <a href="#" onclick="return toggleDiv(this)">
+        <img src="{@docRoot}assets/images/triangle-closed.png" class="toggle-img" height="9px" width="9px" />
+ADT 0.9.8</a> <em>(September 2010)</em>
+  <div class="toggleme">
+
+
+</ul>
+</dd>
+
+<dl>
+
+<dt>Dependencies:</dt>
+
+<dd><p>ADT 0.9.8 is now deprecated. Please use ADT 0.9.9 instead.</p></dd>
+
+<dt>General notes:</dt>
+<dd>
+<ul>
+<li>Adds a new Action, "Rename Application Package", to the Android Tools
+contextual menu. The Action does a full application package refactoring.
+<li>Adds support for library projects that don't have a source folder
+called <code>src/</code>. There is now support for any number of source folders,
+with no name restriction. They can even be in subfolder such as
+<code>src/java</code>. If you are already working with library projects created
+in ADT 0.9.7, see <a 
+href="{@docRoot}guide/developing/eclipse-adt.html#libraryMigrating">Migrating
+library projects to ADT 0.9.8</a> for important information about moving
+to the new ADT environment.</li>
+<li>Adds support for library projects that depend on other library
+projects.</li>
+<li>Adds support for additional resource qualifiers:
+<code>car</code>/<code>desk</code>, <code>night</code>/<code>notnight</code> and
+<code>navexposed</code>/<code>navhidden</code>.</li>
+<li>Adds more device screen types in the layout editor. All screen
+resolution/density combinations listed in the <a 
+href="{@docRoot}guide/practices/screens_support.html#range">Supporting
+Multiple Screens</a> are now available.</li>
+<li>Fixes problems with handling of library project names that
+contain characters that are incompatible with the Eclipse path variable.
+Now properly sets up the link between the main project and the library
+project.</li>
+</ul>
+</dd>
+</dl>
+ </div>
+</div>
+
+
+<div class="toggleable closed">
   <a href="#" onclick="return toggleDiv(this)">
         <img src="{@docRoot}assets/images/triangle-closed.png" class="toggle-img" height="9px" width="9px" />
 ADT 0.9.7</a> <em>(May 2010)</em>
@@ -119,6 +200,7 @@ project support through the Ant build system.</p>
 </dl>
  </div>
 </div>
+
 
 <div class="toggleable closed">
   <a href="#" onclick="return toggleDiv(this)">
@@ -373,7 +455,7 @@ environment. </p>
 
 <h3 id="preparing">Configuring the ADT Plugin</h3>
 
-<p>Once you've successfully downnloaded ADT as described above, the next step
+<p>Once you've successfully downloaded ADT as described above, the next step
 is to modify your ADT preferences in Eclipse to point to the Android SDK directory:</p>
 
 <ol>
