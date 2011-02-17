@@ -2193,6 +2193,8 @@ public final class RIL extends BaseCommands implements CommandsInterface {
             case RIL_REQUEST_EXIT_EMERGENCY_CALLBACK_MODE: ret = responseVoid(p); break;
             case RIL_REQUEST_REPORT_SMS_MEMORY_STATUS: ret = responseVoid(p); break;
             case RIL_REQUEST_REPORT_STK_SERVICE_IS_RUNNING: ret = responseVoid(p); break;
+            /* * Samsung's special features * */
+            case RIL_REQUEST_LOCK_INFO: ret = responseLockInfo(p); break;
             default:
                 throw new RuntimeException("Unrecognized solicited response: " + rr.mRequest);
             //break;
@@ -2860,6 +2862,17 @@ public final class RIL extends BaseCommands implements CommandsInterface {
         Collections.sort(response);
 
         return response;
+    }
+
+    private Object
+    responseLockInfo(Parcel p) {
+        int numLockType = p.readInt();
+        int lockType = p.readInt();
+        int lockKey = p.readInt();
+        int numRetry = p.readInt();
+        SimLockInfoResult simInfo = new SimLockInfoResult(numLockType, lockType, lockKey, numRetry);
+        Log.i("RILJ responseLockInfo: ", simInfo.toString());
+        return simInfo;
     }
 
     private Object
