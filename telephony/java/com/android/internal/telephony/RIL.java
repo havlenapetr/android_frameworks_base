@@ -1012,6 +1012,18 @@ public final class RIL extends BaseCommands implements CommandsInterface {
     }
 
     public void
+    getSIMLockInfo(int param1, int param2, Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_LOCK_INFO, response);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        rr.mp.writeInt(param1);
+        rr.mp.writeInt(param2);
+
+        send(rr);
+    }
+
+    public void
     getSignalStrength (Message result) {
         RILRequest rr
                 = RILRequest.obtain(RIL_REQUEST_SIGNAL_STRENGTH, result);
@@ -3247,6 +3259,26 @@ public final class RIL extends BaseCommands implements CommandsInterface {
             case RIL_REQUEST_EXIT_EMERGENCY_CALLBACK_MODE: return "REQUEST_EXIT_EMERGENCY_CALLBACK_MODE";
             case RIL_REQUEST_REPORT_SMS_MEMORY_STATUS: return "RIL_REQUEST_REPORT_SMS_MEMORY_STATUS";
             case RIL_REQUEST_REPORT_STK_SERVICE_IS_RUNNING: return "RIL_REQUEST_REPORT_STK_SERVICE_IS_RUNNING";
+            /* * Samsung's requests * */
+            case RIL_REQUEST_ACCESS_PHONEBOOK_ENTRY: return "RIL_REQUEST_ACCESS_PHONEBOOK_ENTRY";
+            case RIL_REQUEST_CALL_DEFLECTION: return "RIL_REQUEST_CALL_DEFLECTION";
+            case RIL_REQUEST_CRFM_LINE_SMS_COUNT_MSG: return "RIL_REQUEST_CRFM_LINE_SMS_COUNT_MSG";
+            case RIL_REQUEST_CRFM_LINE_SMS_READ_MSG: return "RIL_REQUEST_CRFM_LINE_SMS_READ_MSG";
+            case RIL_REQUEST_DIAL_EMERGENCY_CALL: return "RIL_REQUEST_DIAL_EMERGENCY_CALL";
+            case RIL_REQUEST_DIAL_VIDEO_CALL: return "RIL_REQUEST_DIAL_VIDEO_CALL";
+            case RIL_REQUEST_GET_CELL_BROADCAST_CONFIG: return "RIL_REQUEST_GET_CELL_BROADCAST_CONFIG";
+            case RIL_REQUEST_GET_LINE_ID: return "RIL_REQUEST_GET_LINE_ID";
+            case RIL_REQUEST_GET_PHONEBOOK_ENTRY: return "RIL_REQUEST_GET_PHONEBOOK_ENTRY";
+            case RIL_REQUEST_GET_PHONEBOOK_STORAGE_INFO: return "RIL_REQUEST_GET_PHONEBOOK_STORAGE_INFO";
+            case RIL_REQUEST_GET_STOREAD_MSG_COUNT: return "RIL_REQUEST_GET_STOREAD_MSG_COUNT";
+            case RIL_REQUEST_LOCK_INFO: return "RIL_REQUEST_LOCK_INFO";
+            case RIL_REQUEST_SEND_ENCODED_USSD: return "RIL_REQUEST_SEND_ENCODED_USSD";
+            case RIL_REQUEST_SEND_MOBILE_TRACKER_SMS: return "RIL_REQUEST_SEND_MOBILE_TRACKER_SMS";
+            case RIL_REQUEST_SET_CELL_BROADCAST_CONFIG: return "RIL_REQUEST_SET_CELL_BROADCAST_CONFIG";
+            case RIL_REQUEST_SET_LINE_ID: return "RIL_REQUEST_SET_LINE_ID";
+            case RIL_REQUEST_SET_PDA_MEMORY_STATUS: return "RIL_REQUEST_SET_PDA_MEMORY_STATUS";
+            case RIL_REQUEST_STK_SIM_INIT_EVENT: return "RIL_REQUEST_STK_SIM_INIT_EVENT";
+            case RIL_REQUEST_USIM_PB_CAPA: return "RIL_REQUEST_USIM_PB_CAPA";
             default: return "<unknown request>";
         }
     }
