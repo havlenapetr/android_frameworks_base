@@ -289,6 +289,33 @@ class MountService extends IMountService.Stub
     }
   
     private BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
+
+        private void doMountStorageVolume(String path) {
+            String state = getVolumeState(path);
+
+            if (state.equals(Environment.MEDIA_UNMOUNTED)) {
+                int rc = doMountVolume(path);
+                if (rc != StorageResultCode.OperationSucceeded) {
+                    Slog.e(TAG, String.format("Boot-time mount failed (%d)", rc));
+                }
+            } else if (state.equals(Environment.MEDIA_SHARED)) {
+                /*
+                 * Bootstrap UMS enabled state since vold indicates
+                 * the volume is shared (runtime restart while ums enabled)
+                 */
+                notifyVolumeStateChange(null, path, VolumeState.NoMedia, VolumeState.Shared);
+            }
+
+            /*
+             * If UMS was connected on boot, send the connected event
+             * now that we're up.
+             */
+            if (mSendUmsConnectedOnBoot) {
+                sendUmsIntent(true);
+                mSendUmsConnectedOnBoot = false;
+            }
+        }
+
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
 
@@ -306,32 +333,16 @@ class MountService extends IMountService.Stub
                 new Thread() {
                     public void run() {
                         try {
-                            String path = Environment.getExternalStorageDirectory().getPath();
-                            String state = getVolumeState(path);
-
-                            if (state.equals(Environment.MEDIA_UNMOUNTED)) {
-                                int rc = doMountVolume(path);
-                                if (rc != StorageResultCode.OperationSucceeded) {
-                                    Slog.e(TAG, String.format("Boot-time mount failed (%d)", rc));
-                                }
-                            } else if (state.equals(Environment.MEDIA_SHARED)) {
-                                /*
-                                 * Bootstrap UMS enabled state since vold indicates
-                                 * the volume is shared (runtime restart while ums enabled)
-                                 */
-                                notifyVolumeStateChange(null, path, VolumeState.NoMedia, VolumeState.Shared);
-                            }
-
-                            /*
-                             * If UMS was connected on boot, send the connected event
-                             * now that we're up.
-                             */
-                            if (mSendUmsConnectedOnBoot) {
-                                sendUmsIntent(true);
-                                mSendUmsConnectedOnBoot = false;
-                            }
+                            String extPath = Environment.getExternalStorageDirectory().getPath();
+                            doMountStorageVolume(extPath);
                         } catch (Exception ex) {
-                            Slog.e(TAG, "Boot-time mount exception", ex);
+                            Slog.e(TAG, "Boot-time external mount exception", ex);
+                        }
+                        try {
+                            String inPath = Environment.getInternalStorageDirectory().getPath();
+                            doMountStorageVolume(inPath);
+                        } catch (Exception ex) {
+                            Slog.e(TAG, "Boot-time internal mount exception", ex);
                         }
                     }
                 }.start();
