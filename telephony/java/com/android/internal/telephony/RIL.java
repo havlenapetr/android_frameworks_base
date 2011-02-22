@@ -3558,5 +3558,27 @@ public final class RIL extends BaseCommands implements CommandsInterface {
 
         send(rr);
     }
+
+    public void dialEmergencyCall(String address, int clirMode, Message result) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_DIAL_EMERGENCY_CALL, result);
+        rr.mp.writeString(address);
+        rr.mp.writeInt(clirMode);
+        rr.mp.writeInt(0);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        send(rr);
+    }
+
+    public void dialVideoCall(String address, int clirMode, Message result) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_DIAL_VIDEO_CALL, result);
+        rr.mp.writeString(address);
+        rr.mp.writeInt(clirMode);
+        rr.mp.writeInt(0);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        send(rr);
+    }
     // ***** End of methods for Samsung support
 }

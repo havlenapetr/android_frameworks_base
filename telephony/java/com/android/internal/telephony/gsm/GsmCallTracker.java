@@ -228,6 +228,71 @@ public final class GsmCallTracker extends CallTracker {
         return dial(dialString, CommandsInterface.CLIR_DEFAULT);
     }
 
+    /**
+     * clirMode is one of the CLIR_ constants
+     */
+    Connection
+    dialVideoCall (String dialString, int clirMode) throws CallStateException {
+        // note that this triggers call state changed notif
+        clearDisconnected();
+
+        //if (!canDial()) {
+        //    throw new CallStateException("cannot dial in current state");
+        //}
+
+        // The new call must be assigned to the foreground call.
+        // That call must be idle, so place anything that's
+        // there on hold
+        if (foregroundCall.getState() == GsmCall.State.ACTIVE) {
+            // this will probably be done by the radio anyway
+            // but the dial might fail before this happens
+            // and we need to make sure the foreground call is clear
+            // for the newly dialed connection
+            switchWaitingOrHoldingAndActive();
+
+            // Fake local state so that
+            // a) foregroundCall is empty for the newly dialed connection
+            // b) hasNonHangupStateChanged remains false in the
+            // next poll, so that we don't clear a failed dialing call
+            fakeHoldForegroundBeforeDial();
+        }
+
+        if (foregroundCall.getState() != GsmCall.State.IDLE) {
+            //we should have failed in !canDial() above before we get here
+            throw new CallStateException("cannot dial in current state");
+        }
+
+        pendingMO = new GsmConnection(phone.getContext(), dialString, this, foregroundCall);
+        hangupPendingMO = false;
+
+        if (pendingMO.address == null || pendingMO.address.length() == 0
+            || pendingMO.address.indexOf(PhoneNumberUtils.WILD) >= 0
+        ) {
+            // Phone number is invalid
+            pendingMO.cause = Connection.DisconnectCause.INVALID_NUMBER;
+
+            // handlePollCalls() will notice this call not present
+            // and will mark it as dropped.
+            pollCallsWhenSafe();
+        } else {
+            // Always unmute when initiating a new call
+            setMute(false);
+
+            cm.dialVideoCall(pendingMO.address, clirMode, obtainCompleteMessage());
+        }
+
+        updatePhoneState();
+        phone.notifyPreciseCallStateChanged();
+
+        return pendingMO;
+    }
+
+
+    Connection
+    dialVideoCall (String dialString) throws CallStateException {
+        return dialVideoCall(dialString, CommandsInterface.CLIR_DEFAULT);
+    }
+
     void
     acceptCall () throws CallStateException {
         // FIXME if SWITCH fails, should retry with ANSWER

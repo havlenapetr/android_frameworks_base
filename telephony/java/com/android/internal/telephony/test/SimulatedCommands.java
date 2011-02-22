@@ -496,6 +496,21 @@ public final class SimulatedCommands extends BaseCommands
      *  retMsg.obj = AsyncResult ar
      *  ar.exception carries exception on failure
      *  ar.userObject contains the orignal value of result.obj
+     *  ar.result is null on success and failure
+     *
+     * CLIR_DEFAULT     == on "use subscription default value"
+     * CLIR_SUPPRESSION == on "CLIR suppression" (allow CLI presentation)
+     * CLIR_INVOCATION  == on "CLIR invocation" (restrict CLI presentation)
+     */
+    public void dialVideoCall (String address, int clirMode, Message result) {
+        // do nothing now
+    }
+
+    /**
+     *  returned message
+     *  retMsg.obj = AsyncResult ar
+     *  ar.exception carries exception on failure
+     *  ar.userObject contains the orignal value of result.obj
      *  ar.result is String containing IMSI on success
      */
     public void getIMSI(Message result) {

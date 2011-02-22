@@ -740,6 +740,36 @@ public class GSMPhone extends PhoneBase {
         }
     }
 
+    public Connection
+    dialVideoCall(String dialString) throws CallStateException {
+        // Need to make sure dialString gets parsed properly
+        String newDialString = PhoneNumberUtils.stripSeparators(dialString);
+
+        // handle in-call MMI first if applicable
+        if (handleInCallMmiCommands(newDialString)) {
+            return null;
+        }
+
+        // Only look at the Network portion for mmi
+        String networkPortion = PhoneNumberUtils.extractNetworkPortionAlt(newDialString);
+        GsmMmiCode mmi = GsmMmiCode.newFromDialString(networkPortion, this);
+        if (LOCAL_DEBUG) Log.d(LOG_TAG,
+                               "dialing video call " + dialString);
+
+        if (mmi == null) {
+            return mCT.dialVideoCall(newDialString);
+        } else if (mmi.isTemporaryModeCLIR()) {
+            return mCT.dialVideoCall(mmi.dialingNumber, mmi.getCLIRMode());
+        } else {
+            mPendingMMIs.add(mmi);
+            mMmiRegistrants.notifyRegistrants(new AsyncResult(null, mmi, null));
+            mmi.processCode();
+        }
+
+        // FIXME should this return null or something else?
+        return null;
+    }
+
     public boolean handlePinMmi(String dialString) {
         GsmMmiCode mmi = GsmMmiCode.newFromDialString(dialString, this);
 
