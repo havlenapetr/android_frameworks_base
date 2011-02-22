@@ -3291,6 +3291,7 @@ public final class RIL extends BaseCommands implements CommandsInterface {
             case RIL_REQUEST_SET_PDA_MEMORY_STATUS: return "RIL_REQUEST_SET_PDA_MEMORY_STATUS";
             case RIL_REQUEST_STK_SIM_INIT_EVENT: return "RIL_REQUEST_STK_SIM_INIT_EVENT";
             case RIL_REQUEST_USIM_PB_CAPA: return "RIL_REQUEST_USIM_PB_CAPA";
+            case RIL_REQUEST_READ_SMS_FROM_SIM: return "RIL_REQUEST_READ_SMS_FROM_SIM";
             default: return "<unknown request>";
         }
     }
@@ -3509,4 +3510,53 @@ public final class RIL extends BaseCommands implements CommandsInterface {
 
         send(rr);
     }
+
+    // ***** Methods for Samsung support
+    public void readSmsFromSim(int paramInt, Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_READ_SMS_FROM_SIM, response);
+        rr.mp.writeInt(1);
+        rr.mp.writeInt(paramInt);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        send(rr);
+    }
+
+    public void queryLineId(Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_GET_LINE_ID, response);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        send(rr);
+    }
+
+    public void sendMobileTrackerSMS(String paramString1, String paramString2, Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_SEND_MOBILE_TRACKER_SMS, response);
+        rr.mp.writeInt(2);
+        rr.mp.writeString(paramString1);
+        rr.mp.writeString(paramString2);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        send(rr);
+    }
+
+    public void setLineId(int paramInt, Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_SET_LINE_ID, response);
+        rr.mp.writeInt(1);
+        rr.mp.writeInt(paramInt);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        send(rr);
+    }
+
+    public void setSimInitEvent(Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_STK_SIM_INIT_EVENT, response);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        send(rr);
+    }
+    // ***** End of methods for Samsung support
 }
