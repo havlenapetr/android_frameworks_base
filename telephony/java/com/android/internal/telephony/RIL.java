@@ -3049,6 +3049,18 @@ public final class RIL extends BaseCommands implements CommandsInterface {
             response[i] = p.readInt();
         }
 
+        /* Matching Samsung signal strength to asu.
+           Method taken from Samsungs cdma/gsmSignalStateTracker */
+        response[0] = response[0] & 0xFF; //gsmDbm
+        response[1] = -1; //gsmEcio
+        response[2] = (response[2] < 0)?-120:-response[2]; //cdmaDbm
+        response[3] = (response[3] < 0)?-160:-response[3]; //cdmaEcio
+        response[4] = (response[4] < 0)?-120:-response[4]; //evdoRssi
+        response[5] = (response[5] < 0)?-1:-response[5]; //evdoEcio
+        if(response[6] < 0 || response[6] > 8) {
+            response[6] = -1;
+        }
+
         return response;
     }
 
