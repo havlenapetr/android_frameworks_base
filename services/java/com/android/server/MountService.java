@@ -41,6 +41,7 @@ import android.os.SystemProperties;
 import android.util.Slog;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HashMap;
 
 /**
  * MountService implements back-end services for platform storage
@@ -114,7 +115,7 @@ class MountService extends IMountService.Stub
 
     private Context                               mContext;
     private NativeDaemonConnector                 mConnector;
-    private String                                mLegacyState = Environment.MEDIA_REMOVED;
+    private HashMap<String, String>               mLegacyStates;
     private PackageManagerService                 mPms;
     private boolean                               mUmsEnabling;
     // Used as a lock for methods that register/unregister listeners.
@@ -388,8 +389,9 @@ class MountService extends IMountService.Stub
             return;
         }
 
-        if (mLegacyState.equals(state)) {
-            Slog.w(TAG, String.format("Duplicate state transition (%s -> %s)", mLegacyState, state));
+        String currentState = getVolumeState(path);
+        if (currentState.equals(state)) {
+            Slog.w(TAG, String.format("Duplicate state transition (%s -> %s)", currentState, state));
             return;
         }
         // Update state on PackageManager
@@ -398,8 +400,8 @@ class MountService extends IMountService.Stub
         } else if (Environment.MEDIA_MOUNTED.equals(state)) {
             mPms.updateExternalMediaStatus(true, false);
         }
-        String oldState = mLegacyState;
-        mLegacyState = state;
+        String oldState = currentState;
+        setVolumeState(path, state);
 
         synchronized (mListeners) {
             for (int i = mListeners.size() -1; i >= 0; i--) {
@@ -914,6 +916,9 @@ class MountService extends IMountService.Stub
      */
     public MountService(Context context) {
         mContext = context;
+        mLegacyStates = new HashMap<String, String>();
+        mLegacyStates.put(Environment.getExternalStorageDirectory().getPath(), Environment.MEDIA_REMOVED);
+        mLegacyStates.put(Environment.getInternalStorageDirectory().getPath(), Environment.MEDIA_REMOVED);
 
         // XXX: This will go away soon in favor of IMountServiceObserver
         mPms = (PackageManagerService) ServiceManager.getService("package");
@@ -1090,17 +1095,21 @@ class MountService extends IMountService.Stub
      * @return state of the volume at the specified mount point
      */
     public String getVolumeState(String mountPoint) {
-        /*
-         * XXX: Until we have multiple volume discovery, just hardwire
-         * this to /sdcard
-         */
-        if (!mountPoint.equals(Environment.getExternalStorageDirectory().getPath()) &&
-                !mountPoint.equals(Environment.getInternalStorageDirectory().getPath())) {
+        String volumeState = mLegacyStates.get(mountPoint);
+        if (volumeState == null) {
             Slog.w(TAG, "getVolumeState(" + mountPoint + "): Unknown volume");
             throw new IllegalArgumentException();
         }
 
-        return mLegacyState;
+        return volumeState;
+    }
+
+    private void setVolumeState(String mountPoint, String volumeState) {
+        if (!mLegacyStates.containsKey(mountPoint)) {
+            Slog.w(TAG, "setVolumeState(" + mountPoint + "): Unknown volume");
+            throw new IllegalArgumentException();
+        }
+        mLegacyStates.put(mountPoint, volumeState);
     }
 
     public int mountVolume(String path) {
