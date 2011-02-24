@@ -2844,6 +2844,7 @@ public final class RIL extends BaseCommands implements CommandsInterface {
             voiceSettings = p.readInt();
             dc.isVoice = (0 == voiceSettings) ? false : true;
             dc.isVoicePrivacy = (0 != p.readInt());
+            voiceSettings = p.readInt(); //Some Samsung magic data for Videocalls
             dc.number = p.readString();
             int np = p.readInt();
             dc.numberPresentation = DriverCall.presentationFromCLIP(np);
