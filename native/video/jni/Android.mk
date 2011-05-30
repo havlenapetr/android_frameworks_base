@@ -23,6 +23,7 @@ LOCAL_C_INCLUDES += \
 LOCAL_MODULE_TAGS := optional
 
 LOCAL_PRELINK_MODULE := false
+LOCAL_ARM_MODE := arm
 
 LOCAL_MODULE:= libjnivideo
 

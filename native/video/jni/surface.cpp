@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2011 Petr Havlena  havlenapetr@gmail.com
  * Copyright (C) 2009 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,11 +24,17 @@
 
 using namespace android;
 
-static Surface*		sSurface;
-static SkBitmap		sBitmapClient;
-static SkBitmap		sBitmapSurface;
+static Surface*         surface;
+static Surface::SurfaceInfo surfaceInfo;
 
-static Surface* getNativeSurface(JNIEnv* env, jobject jsurface) {
+static SkBitmap         bmpClient;
+static SkBitmap         bmpSurface;
+static SkRect           rect_bmpClient;
+static SkRect           rect_bmpSurface;
+static SkMatrix         matrix;
+
+static
+Surface* getNativeSurface(JNIEnv* env, jobject jsurface) {
 	jclass clazz = env->FindClass("android/view/Surface");
 	jfieldID field_surface = env->GetFieldID(clazz, "mSurface", "I");
 	if(field_surface == NULL) {
@@ -36,44 +43,41 @@ static Surface* getNativeSurface(JNIEnv* env, jobject jsurface) {
 	return (Surface *) env->GetIntField(jsurface, field_surface);
 }
 
-static int initBitmap(SkBitmap *bitmap, int format, int width, int height, bool allocPixels) {
+static
+void initBitmap(SkBitmap *bitmap, int format, int width, int height) {
 	switch (format) {
         case PIXEL_FORMAT_RGBA_8888:
-            bitmap->setConfig(SkBitmap::kARGB_8888_Config, width, height);
+            bitmap->setConfig(SkBitmap::kARGB_8888_Config,
+                width, height);
             break;
 			
         case PIXEL_FORMAT_RGBA_4444:
-            bitmap->setConfig(SkBitmap::kARGB_4444_Config, width, height);
+            bitmap->setConfig(SkBitmap::kARGB_4444_Config,
+                width, height);
             break;
 			
         case PIXEL_FORMAT_RGB_565:
-            bitmap->setConfig(SkBitmap::kRGB_565_Config, width, height);
+            bitmap->setConfig(SkBitmap::kRGB_565_Config,
+                width, height);
             break;
 			
         case PIXEL_FORMAT_A_8:
-            bitmap->setConfig(SkBitmap::kA8_Config, width, height);
+            bitmap->setConfig(SkBitmap::kA8_Config,
+                width, height);
             break;
 			
         default:
-            bitmap->setConfig(SkBitmap::kNo_Config, width, height);
+            bitmap->setConfig(SkBitmap::kNo_Config,
+                width, height);
             break;
     }
-	
-	if(allocPixels) {
-		bitmap->setIsOpaque(true);
-		//-- alloc array of pixels
-		if(!bitmap->allocPixels()) {
-			return -1;
-		}
-	}
-	return 0;
 }
 
 int AndroidSurface_register(JNIEnv* env, jobject jsurface) {
 	__android_log_print(ANDROID_LOG_INFO, TAG, "registering video surface");
 	
-	sSurface = getNativeSurface(env, jsurface);
-	if(sSurface == NULL) {
+	surface = getNativeSurface(env, jsurface);
+	if(surface == NULL) {
 	     return ANDROID_SURFACE_RESULT_JNI_EXCEPTION;
 	}
 	
@@ -84,58 +88,56 @@ int AndroidSurface_register(JNIEnv* env, jobject jsurface) {
 
 int AndroidSurface_getPixels(int width, int height, void** pixels) {
 	__android_log_print(ANDROID_LOG_INFO, TAG, "getting surface's pixels %ix%i", width, height);
-	if(sSurface == NULL) {
-		return ANDROID_SURFACE_RESULT_JNI_EXCEPTION;
+	if(surface == NULL) {
+            return ANDROID_SURFACE_RESULT_JNI_EXCEPTION;
 	}
-	if(initBitmap(&sBitmapClient, PIXEL_FORMAT_RGB_565, width, height, true) < 0) {
+
+        initBitmap(&bmpClient, PIXEL_FORMAT_RGB_565, width, height);
+        bmpClient.setIsOpaque(true);
+        //-- alloc array of pixels
+        if(!bmpClient.allocPixels()) {
 		return ANDROID_SURFACE_RESULT_COULDNT_INIT_BITMAP_CLIENT;
 	}
-	*pixels = sBitmapClient.getPixels();
-	__android_log_print(ANDROID_LOG_INFO, TAG, "getted");
-	return ANDROID_SURFACE_RESULT_SUCCESS;
+        *pixels = bmpClient.getPixels();
+	
+        __android_log_print(ANDROID_LOG_INFO, TAG, "getted");
+        return ANDROID_SURFACE_RESULT_SUCCESS;
 }
 
-static void doUpdateSurface() {
-	SkCanvas	canvas(sBitmapSurface);
-	SkRect		surface_sBitmapClient;
-	SkRect		surface_sBitmapSurface;
-	SkMatrix	matrix;
-	
-	surface_sBitmapSurface.set(0, 0, sBitmapSurface.width(), sBitmapSurface.height());
-	surface_sBitmapClient.set(0, 0, sBitmapClient.width(), sBitmapClient.height());
-	matrix.setRectToRect(surface_sBitmapClient, surface_sBitmapSurface, SkMatrix::kFill_ScaleToFit);
-	
-	canvas.drawBitmapMatrix(sBitmapClient, matrix);
-}
+static
+void doUpdateSurface() {
+	SkCanvas	canvas(bmpSurface);
 
-static int prepareSurfaceBitmap(Surface::SurfaceInfo* info) {
-	if(initBitmap(&sBitmapSurface, info->format, info->w, info->h, false) < 0) {
-		return -1;
-	}
-	sBitmapSurface.setPixels(info->bits);
-	return 0;
+	rect_bmpSurface.set(0, 0, bmpSurface.width(), bmpSurface.height());
+	rect_bmpClient.set(0, 0, bmpClient.width(), bmpClient.height());
+	matrix.setRectToRect(rect_bmpClient, rect_bmpSurface, SkMatrix::kFill_ScaleToFit);
+
+	canvas.drawBitmapMatrix(bmpClient, matrix);
 }
 
 int AndroidSurface_updateSurface() {
-	static Surface::SurfaceInfo surfaceInfo;
-	if(sSurface == NULL) {
+	if(surface == NULL) {
 		return ANDROID_SURFACE_RESULT_JNI_EXCEPTION;
 	}
 	
-	if (!sSurface->isValid()) {
+	if (!surface->isValid()) {
 		return ANDROID_SURFACE_RESULT_NOT_VALID;
 	}
-	if (sSurface->lock(&surfaceInfo) < 0) {
+	if (surface->lock(&surfaceInfo) < 0) {
 		return ANDROID_SURFACE_RESULT_COULDNT_LOCK;
 	}
 	
-	if(prepareSurfaceBitmap(&surfaceInfo) < 0) {
-		return ANDROID_SURFACE_RESULT_COULDNT_INIT_BITMAP_SURFACE;
+	if(bmpSurface.width() != surfaceInfo.w ||
+                bmpSurface.height() != surfaceInfo.h)
+	{
+                initBitmap(&bmpSurface, surfaceInfo.format,
+				surfaceInfo.w, surfaceInfo.h);
 	}
+	bmpSurface.setPixels(surfaceInfo.bits);
 	
 	doUpdateSurface();
 	
-	if (sSurface->unlockAndPost() < 0) {
+	if (surface->unlockAndPost() < 0) {
 		return ANDROID_SURFACE_RESULT_COULDNT_UNLOCK_AND_POST;
 	}
 	return ANDROID_SURFACE_RESULT_SUCCESS;
