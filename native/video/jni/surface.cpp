@@ -89,62 +89,69 @@ int AndroidSurface_register(JNIEnv* env, jobject jsurface) {
 int AndroidSurface_getPixels(int width, int height, void** pixels) {
 	__android_log_print(ANDROID_LOG_INFO, TAG, "getting surface's pixels %ix%i", width, height);
 	if(surface == NULL) {
-            return ANDROID_SURFACE_RESULT_JNI_EXCEPTION;
+        return ANDROID_SURFACE_RESULT_JNI_EXCEPTION;
 	}
 
-        initBitmap(&bmpClient, PIXEL_FORMAT_RGB_565, width, height);
-        bmpClient.setIsOpaque(true);
-        //-- alloc array of pixels
-        if(!bmpClient.allocPixels()) {
-		return ANDROID_SURFACE_RESULT_COULDNT_INIT_BITMAP_CLIENT;
+    initBitmap(&bmpClient, PIXEL_FORMAT_RGB_565, width, height);
+    bmpClient.setIsOpaque(true);
+    //-- alloc array of pixels
+    if(!bmpClient.allocPixels()) {
+        return ANDROID_SURFACE_RESULT_COULDNT_INIT_BITMAP_CLIENT;
 	}
-        *pixels = bmpClient.getPixels();
+    *pixels = bmpClient.getPixels();
 	
-        __android_log_print(ANDROID_LOG_INFO, TAG, "getted");
-        return ANDROID_SURFACE_RESULT_SUCCESS;
+    __android_log_print(ANDROID_LOG_INFO, TAG, "getted");
+    return ANDROID_SURFACE_RESULT_SUCCESS;
 }
 
 static
-void doUpdateSurface() {
-	SkCanvas	canvas(bmpSurface);
+void doUpdateSurface(bool autoscale) {
+    SkCanvas canvas(bmpSurface);
 
-	rect_bmpSurface.set(0, 0, bmpSurface.width(), bmpSurface.height());
-	rect_bmpClient.set(0, 0, bmpClient.width(), bmpClient.height());
-	matrix.setRectToRect(rect_bmpClient, rect_bmpSurface, SkMatrix::kFill_ScaleToFit);
-
-	canvas.drawBitmapMatrix(bmpClient, matrix);
+    if(autoscale)
+    {
+        rect_bmpSurface.set(0, 0, bmpSurface.width(), bmpSurface.height());
+        rect_bmpClient.set(0, 0, bmpClient.width(), bmpClient.height());
+        matrix.setRectToRect(rect_bmpClient, rect_bmpSurface, SkMatrix::kFill_ScaleToFit);
+        canvas.drawBitmapMatrix(bmpClient, matrix);
+    }
+    else
+    {
+        canvas.drawBitmap(bmpClient, 0, 0);
+    }
 }
 
-int AndroidSurface_updateSurface() {
-	if(surface == NULL) {
-		return ANDROID_SURFACE_RESULT_JNI_EXCEPTION;
-	}
+int AndroidSurface_updateSurface(bool autoscale) {
+    if(surface == NULL) {
+        return ANDROID_SURFACE_RESULT_JNI_EXCEPTION;
+    }
+    if (!surface->isValid()) {
+        return ANDROID_SURFACE_RESULT_NOT_VALID;
+    }
+    if (surface->lock(&surfaceInfo) < 0) {
+        return ANDROID_SURFACE_RESULT_COULDNT_LOCK;
+    }
+
+    /* create surface bitmap with pixels of surface */
+    if(bmpSurface.width() != surfaceInfo.w ||
+        bmpSurface.height() != surfaceInfo.h)
+    {
+        initBitmap(&bmpSurface, surfaceInfo.format,
+            surfaceInfo.w, surfaceInfo.h);
+    }
+    bmpSurface.setPixels(surfaceInfo.bits);
+
+    /* redraw surface screen */
+    doUpdateSurface(autoscale);
 	
-	if (!surface->isValid()) {
-		return ANDROID_SURFACE_RESULT_NOT_VALID;
-	}
-	if (surface->lock(&surfaceInfo) < 0) {
-		return ANDROID_SURFACE_RESULT_COULDNT_LOCK;
-	}
-	
-	if(bmpSurface.width() != surfaceInfo.w ||
-                bmpSurface.height() != surfaceInfo.h)
-	{
-                initBitmap(&bmpSurface, surfaceInfo.format,
-				surfaceInfo.w, surfaceInfo.h);
-	}
-	bmpSurface.setPixels(surfaceInfo.bits);
-	
-	doUpdateSurface();
-	
-	if (surface->unlockAndPost() < 0) {
-		return ANDROID_SURFACE_RESULT_COULDNT_UNLOCK_AND_POST;
-	}
-	return ANDROID_SURFACE_RESULT_SUCCESS;
+    if (surface->unlockAndPost() < 0) {
+        return ANDROID_SURFACE_RESULT_COULDNT_UNLOCK_AND_POST;
+    }
+    return ANDROID_SURFACE_RESULT_SUCCESS;
 }
 
 int AndroidSurface_unregister() {
-	__android_log_print(ANDROID_LOG_INFO, TAG, "unregistering video surface");
-	__android_log_print(ANDROID_LOG_INFO, TAG, "unregistered");
+    __android_log_print(ANDROID_LOG_INFO, TAG, "unregistering video surface");
+    __android_log_print(ANDROID_LOG_INFO, TAG, "unregistered");
     return ANDROID_SURFACE_RESULT_SUCCESS;
 }
