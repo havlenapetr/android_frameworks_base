@@ -22,6 +22,8 @@
 
 #include <SkCanvas.h>
 
+#define SURFACE_CLASS_PATH  "android/view/Surface"
+
 using namespace android;
 
 typedef struct ANativeSurface {
@@ -34,6 +36,7 @@ extern SkCanvas* ANativeCanvas_getSkCanvas(ANativeCanvas* canvas);
 extern ANativeCanvas* ANativeCanvas_fromSurface(JNIEnv* env, jobject jsurface);
 extern void ANativeCanvas_setWidth(ANativeCanvas* canvas, int32_t width);
 extern void ANativeCanvas_setHeight(ANativeCanvas* canvas, int32_t height);
+extern void ANativeCanvas_release(ANativeCanvas* canvas);
 //extern ANativeCanvas* ANativeCanvas_acquire();
 //extern void ANativeCanvas_release(ANativeCanvas* canvas);
 
@@ -53,7 +56,7 @@ static inline SkBitmap::Config convertPixelFormat(PixelFormat format) {
 }
 
 ANativeSurface* ANativeSurface_fromSurface(JNIEnv* env, jobject jsurface) {
-    jclass clazz = env->FindClass("android/view/Surface");
+    jclass clazz = env->FindClass(SURFACE_CLASS_PATH);
 	jfieldID field_surface = env->GetFieldID(clazz, "mNativeSurface", "I");
 	if(field_surface == NULL) {
         LOGE("Can't obtain native surface pointer");
@@ -70,6 +73,10 @@ ANativeSurface* ANativeSurface_fromSurface(JNIEnv* env, jobject jsurface) {
     }
     surf->canvas = canvas;
     return surf;
+}
+
+void ANativeSurface_release(ANativeSurface* surface) {
+    ANativeCanvas_release(surface->canvas);
 }
 
 ANativeCanvas* ANativeSurface_lockCanvas(ANativeSurface* surface, ARect* inOutDirtyBounds) {

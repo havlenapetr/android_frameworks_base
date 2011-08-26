@@ -5,7 +5,8 @@ include $(CLEAR_VARS)
 #
 LOCAL_SRC_FILES:= \
     native_canvas.cpp \
-    native_surface.cpp
+    native_surface.cpp \
+    native_bitmap_factory.cpp
 
 LOCAL_SHARED_LIBRARIES := \
     libutils \
@@ -15,6 +16,7 @@ LOCAL_SHARED_LIBRARIES := \
 
 LOCAL_C_INCLUDES := \
     external/skia/include/core \
+    external/skia/include/images \
     frameworks/base/native/framework/include
 
 LOCAL_MODULE:= libframework

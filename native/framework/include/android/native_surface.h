@@ -57,6 +57,8 @@ typedef struct ANativeSurface_Buffer {
     uint32_t reserved[6];
 } ANativeSurface_Buffer;
     
+void ANativeSurface_release(ANativeSurface* surface);
+    
 ANativeCanvas* ANativeSurface_lockCanvas(ANativeSurface* surface, ARect* inOutDirtyBounds);
 
 int32_t ANativeSurface_unlockCanvasAndPost(ANativeSurface* surface);

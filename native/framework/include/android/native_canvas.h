@@ -30,6 +30,9 @@
 #define ACOLOR_CYAN    0xFF00FFFF  //!< cyan SkColor value
 #define ACOLOR_MAGENTA 0xFFFF00FF  //!< magenta SkColor value
 
+#include <jni.h>
+#include <android/native_bitmap_factory.h>
+ 
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -37,14 +40,11 @@ extern "C" {
 struct ANativeCanvas;
 typedef struct ANativeCanvas ANativeCanvas;
 
-/*ANativeCanvas* ANativeCanvas_acquire(ANativeSurface* window, int w, int h);
-    
-void ANativeCanvas_release(ANativeCanvas* canvas);*/
+ANativeCanvas* ANativeCanvas_fromCanvas(JNIEnv* env, jobject jcanvas);
     
 int32_t ANativeCanvas_getWidth(ANativeCanvas* canvas);
     
 int32_t ANativeCanvas_getHeight(ANativeCanvas* canvas);
-        
     
 int32_t ANativeCanvas_drawCircle(ANativeCanvas* canvas, int x, int y, int radius);
     
@@ -57,7 +57,9 @@ int32_t ANativeCanvas_drawText(ANativeCanvas* canvas, const void* text, size_t t
     
 int32_t ANativeCanvas_drawPolyline(ANativeCanvas* canvas, int* points, int points_size);
     
-int32_t ANativeCanvas_draw(ANativeCanvas* canvas);
+int32_t ANativeCanvas_drawBitmap(ANativeCanvas* canvas, ANativeBitmap* bitmap, int x, int y);
+    
+//int32_t ANativeCanvas_draw(ANativeCanvas* canvas);
 
 #ifdef __cplusplus
 };

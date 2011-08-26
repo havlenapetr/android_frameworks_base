@@ -27,55 +27,71 @@
 
 #include <jni.h>
 
+#define SURFACE_CLASS_PATH  "android/view/Surface"
+#define CANVAS_CLASS_PATH   "android/graphics/Canvas"
+#define CANVAS_FIELD_PATH   "Landroid/graphics/Canvas;"
+
 using namespace android;
 
 typedef struct ANativeCanvas {
     // actual pen
-    SkPaint pen;
+    SkPaint* pen;
     
     // pointer on skia canvas, used only by native_canvas.c
     SkCanvas* canvas;
     
     int width, height;
+    int density;
+    int screenDensity;
 } ANativeCanvas;
+
+extern int ANativeBitmapFactory_getDensity(ANativeBitmap* bitmap);
+extern SkBitmap* ANativeBitmapFactory_getSkBitmap(ANativeBitmap* bitmap);
 
 ANativeCanvas* ANativeCanvas_fromSurface(JNIEnv* env, jobject jsurface) {
     LOGI("Obtaining canvas from jsurface");
-    
-    jclass clazz_surface = env->FindClass("android/view/Surface");
-    jfieldID field_jcanvas = env->GetFieldID(clazz_surface, "mCanvas", "Landroid/graphics/Canvas;");
+
+    jclass clazz_surface = env->FindClass(SURFACE_CLASS_PATH);
+    jfieldID field_jcanvas = env->GetFieldID(clazz_surface, "mCanvas", CANVAS_FIELD_PATH);
     if(field_jcanvas == NULL) {
         LOGE("Can't obtain java canvas object from surface!");
 		return NULL;
 	}
-    
+
     // canvas java object in java surface object
     jobject jcanvas = env->GetObjectField(jsurface, field_jcanvas);
-    
-    jclass clazz_canvas = env->FindClass("android/graphics/Canvas");
+    return ANativeCanvas_fromCanvas(env, jcanvas);
+}
+
+ANativeCanvas* ANativeCanvas_fromCanvas(JNIEnv* env, jobject jcanvas) {
+    jclass clazz_canvas = env->FindClass(CANVAS_CLASS_PATH);
 	jfieldID field_canvas = env->GetFieldID(clazz_canvas, "mNativeCanvas", "I");
 	if(field_canvas == NULL) {
         LOGE("Can't obtain native canvas pointer");
 		return NULL;
 	}
-	
+    jfieldID field_density = env->GetFieldID(clazz_canvas, "mDensity", "I");
+	if(field_density == NULL) {
+        LOGE("Can't obtain field_density");
+		return NULL;
+	}
+    jfieldID field_screenDensity = env->GetFieldID(clazz_canvas, "mScreenDensity", "I");
+	if(field_screenDensity == NULL) {
+        LOGE("Can't obtain field_screenDensity");
+		return NULL;
+	}
+
     ANativeCanvas* canvas = (ANativeCanvas *) malloc(sizeof(ANativeCanvas));
     canvas->canvas = (SkCanvas *) env->GetIntField(jcanvas, field_canvas);
-    canvas->pen.setColor(ACOLOR_WHITE);
-    return canvas;
-}
-
-ANativeCanvas* ANativeCanvas_acquire() {
-    LOGI("Creating new canvas");
-    
-    ANativeCanvas* canvas = (ANativeCanvas *) malloc(sizeof(ANativeCanvas));
-    canvas->canvas = new SkCanvas();
-    canvas->pen.setColor(ACOLOR_WHITE);
+    canvas->density = env->GetIntField(jcanvas, field_density);
+    canvas->screenDensity = env->GetIntField(jcanvas, field_screenDensity);
+    canvas->pen = new SkPaint;
+    canvas->pen->setColor(ACOLOR_WHITE);
     return canvas;
 }
 
 void ANativeCanvas_release(ANativeCanvas* canvas) {
-    delete canvas->canvas;
+    delete canvas->pen;
 }
 
 SkCanvas* ANativeCanvas_getSkCanvas(ANativeCanvas* canvas) {
@@ -119,77 +135,100 @@ int32_t ANativeCanvas_getHeight(ANativeCanvas* canvas) {
     return canvas->height;
 }
 
+int32_t ANativeCanvas_drawBitmap(ANativeCanvas* canvas, ANativeBitmap* bitmap, int x, int y) {
+    SkCanvas* c = canvas->canvas;
+    if (c == NULL) {
+        return -1;
+    }
+    
+    int bitmapDensity = ANativeBitmapFactory_getDensity(bitmap);
+    SkBitmap* skBitmap = ANativeBitmapFactory_getSkBitmap(bitmap);
+    if (canvas->density == bitmapDensity || canvas->density == 0
+        || bitmapDensity == 0) {
+        if (canvas->screenDensity != 0 && canvas->screenDensity != bitmapDensity) {
+            canvas->pen->setFilterBitmap(true);
+            c->drawBitmap(*skBitmap, (SkScalar) x, (SkScalar) y, canvas->pen);
+        } else {
+            c->drawBitmap(*skBitmap, (SkScalar) x, (SkScalar) y, canvas->pen);
+        }
+    } else {
+        SkScalar scale = SkFloatToScalar(canvas->density / (float)bitmapDensity);
+        c->translate((SkScalar) x, (SkScalar) y);
+        c->scale(scale, scale);
+        
+        canvas->pen->setFilterBitmap(true);
+        c->drawBitmap(*skBitmap, 0, 0, canvas->pen);
+    }
+    /*SkPaint p;
+    p.setFilterBitmap(true);
+    c->drawBitmap(*ANativeBitmapFactory_getSkBitmap(bitmap), (SkScalar) x, (SkScalar) y, &p);*/
+    return 0;
+}
+
 int32_t ANativeCanvas_drawPolygon(ANativeCanvas* canvas, int* points, int points_size) {
     SkCanvas* c = canvas->canvas;
+    if (c == NULL) {
+        return -1;
+    }
+    
     SkPath path;
     path.moveTo((SkScalar) points[0], (SkScalar) points[1]);
     for (int i = 2; i < points_size; i += 2) {
         path.lineTo((SkScalar) points[i], (SkScalar) points[i + 1]);
     }
     //pen.setStyle(SkPaint::Style::kStrokeAndFill_Style);
-    c->drawPath(path, canvas->pen);
+    c->drawPath(path, *canvas->pen);
     return 0;
 }
 
 int32_t ANativeCanvas_drawText(ANativeCanvas* canvas, const void* text, size_t text_length,
         int text_size, int x, int y, int dx, int dy) {
     SkCanvas* c = canvas->canvas;
-    canvas->pen.setTextSize(text_size / 15);
+    if (c == NULL) {
+        return -1;
+    }
+    
+    canvas->pen->setTextSize(text_size / 15);
     //pen.setStyle(SkPaint::Style::kStrokeAndFill_Style);
-    c->drawText(text, text_length, (SkScalar) x, (SkScalar) y, canvas->pen);
+    c->drawText(text, text_length, (SkScalar) x, (SkScalar) y, *canvas->pen);
     return 0;
 }
 
 int32_t ANativeCanvas_drawPolyline(ANativeCanvas* canvas, int* points, int points_size) {
     SkCanvas* c = canvas->canvas;
+    if (c == NULL) {
+        return -1;
+    }
+    
     SkPath path;
     path.moveTo((SkScalar) points[0], (SkScalar) points[1]);
     for (int i = 2; i < points_size; i += 2) {
         path.lineTo((SkScalar) points[i], (SkScalar) points[i + 1]);
     }
     //pen.setStyle(SkPaint::Style::kStroke_Style);
-    c->drawPath(path, canvas->pen);
+    c->drawPath(path, *canvas->pen);
     return 0;
 }
 
 int32_t ANativeCanvas_drawCircle(ANativeCanvas* canvas, int x, int y, int radius) {
     SkCanvas* c = canvas->canvas;
+    if (c == NULL) {
+        return -1;
+    }
+    
     //p.setStyle(SkPaint::Style::kStrokeAndFill_Style);
-    c->drawCircle((SkScalar)x, (SkScalar)y, (SkScalar)radius, canvas->pen);
+    c->drawCircle((SkScalar)x, (SkScalar)y, (SkScalar)radius, *canvas->pen);
     return 0;
 }
 
 int32_t ANativeCanvas_drawRectange(ANativeCanvas* canvas, int x, int y, int w, int h) {
-    SkPaint p;
     SkCanvas* c = canvas->canvas;
+    if (c == NULL) {
+        return -1;
+    }
+    
     SkRect rect = SkRect::MakeXYWH(x, y, w, h);
-    p.setColor(ACOLOR_WHITE);
     //p.setStyle(SkPaint::Style::kStrokeAndFill_Style);
-    c->drawRect(rect, p);
+    c->drawRect(rect, *canvas->pen);
     return 0;
 }
-
-/*int32_t ANativeCanvas_draw(ANativeCanvas* canvas) {
-    SkCanvas* c = canvas->canvas;
-    ANativeSurface_Buffer buffer;
-    int ret = ANativeSurface_lock(canvas->surface, &buffer, NULL);
-    if(ret < 0) {
-        LOGE("Can't lock native surfacedow!");
-        return -1;
-    }
-    
-    // copy canvas's bitmap pixels to screen
-    SkDevice* device = c->getDevice();
-    if(device == NULL) {
-        LOGE("Can't obtain SkDevice!");
-        return -1;
-    }
-    
-    SkBitmap bitmap = device->accessBitmap(false);
-    bitmap.lockPixels();
-    int bpp = buffer.stride / buffer.width;
-    memcpy(buffer.bits, bitmap.getPixels(), buffer.width * buffer.height * bpp);
-    bitmap.unlockPixels();
-    
-    return ANativeSurface_unlockAndPost(canvas->surface);
-}*/
