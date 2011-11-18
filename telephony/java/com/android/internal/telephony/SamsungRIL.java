@@ -21,6 +21,7 @@ import static com.android.internal.telephony.RILConstants.*;
 import com.android.internal.telephony.CallForwardInfo;
 import com.android.internal.telephony.CommandException;
 import com.android.internal.telephony.DataCallState;
+import com.android.internal.telephony.DataConnection.FailCause;
 import com.android.internal.telephony.gsm.SmsBroadcastConfigInfo;
 import com.android.internal.telephony.gsm.SuppServiceNotification;
 import com.android.internal.telephony.IccCardApplication;
@@ -805,6 +806,26 @@ public class SamsungRIL extends RIL implements CommandsInterface {
         }
 
         return response;
+    }
+
+    @Override
+    protected Object
+    responseSetupDataCall(Parcel p) {
+        DataCallState dataCall = new DataCallState();
+        String strings[] = (String []) responseStrings(p);
+
+        if (strings.length >= 2) {
+            dataCall.cid = Integer.parseInt(strings[0]);
+            dataCall.ifname = strings[1];
+
+            if (strings.length >= 3) {
+                dataCall.addresses = strings[2].split(" ");
+            }
+        } else {
+            dataCall.status = FailCause.ERROR_UNSPECIFIED.getErrorCode(); // Who knows?
+        }
+
+        return dataCall;
     }
 
     protected class SamsungDriverCall extends DriverCall {
