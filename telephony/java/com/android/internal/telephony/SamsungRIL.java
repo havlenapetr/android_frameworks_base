@@ -36,12 +36,15 @@ import android.util.Log;
 
 public class SamsungRIL extends RIL implements CommandsInterface {
 
-    private boolean mSignalbarCount = SystemProperties.getInt("ro.telephony.sends_barcount", 0) == 1 ? true : false;
-
-    private boolean mIsSamsungCdma = SystemProperties.getBoolean("ro.ril.samsung_cdma", false);
+    private boolean mSignalbarCount;
+    private boolean mIsSamsungCdma;
 
     public SamsungRIL(Context context, int networkMode, int cdmaSubscription) {
         super(context, networkMode, cdmaSubscription);
+
+        mSignalbarCount =
+            SystemProperties.getInt("ro.telephony.sends_barcount", 0) == 1 ? true : false;
+        mIsSamsungCdma = SystemProperties.getBoolean("ro.ril.samsung_cdma", false);
     }
 
     //SAMSUNG SGS STATES
@@ -480,6 +483,9 @@ public class SamsungRIL extends RIL implements CommandsInterface {
         case RIL_UNSOL_DATA_CALL_LIST_CHANGED:
             if (RILJ_LOGD) unsljLogRet(response, ret);
 
+            if ("IP".equals(((ArrayList<DataCallState>)ret).get(0).type))
+                break;
+
             mDataNetworkStateRegistrants.notifyRegistrants(new AsyncResult(null, ret, null));
             break;
 
@@ -776,8 +782,7 @@ public class SamsungRIL extends RIL implements CommandsInterface {
 
         /* Matching Samsung signal strength to asu.
 		   Method taken from Samsungs cdma/gsmSignalStateTracker */
-        if(mSignalbarCount)
-        {
+        if(mSignalbarCount) {
             //Samsung sends the count of bars that should be displayed instead of
             //a real signal strength
             response[0] = ((response[0] & 0xFF00) >> 8) * 3; //gsmDbm
@@ -826,6 +831,191 @@ public class SamsungRIL extends RIL implements CommandsInterface {
         }
 
         return dataCall;
+    }
+
+    @Override
+    protected Object
+    responseDataCallList(Parcel p) {
+        ArrayList<DataCallState> response;
+        int ver = 3;
+        int num = p.readInt();
+        riljLog("responseDataCallList ver=" + ver + " num=" + num);
+
+        response = new ArrayList<DataCallState>(num);
+        for (int i = 0; i < num; i++) {
+            response.add(getDataCallState(p, ver));
+        }
+
+        return response;
+    }
+
+    @Override
+    public void
+    supplyIccPinForApp(String pin, String aid, Message result) {
+        //Note: This RIL request has not been renamed to ICC,
+        //       but this request is also valid for SIM and RUIM
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_ENTER_SIM_PIN, result);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        rr.mp.writeInt(1);
+        rr.mp.writeString(pin);
+
+        send(rr);
+    }
+
+    @Override
+    public void
+    supplyIccPin2ForApp(String pin, String aid, Message result) {
+        //Note: This RIL request has not been renamed to ICC,
+        //       but this request is also valid for SIM and RUIM
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_ENTER_SIM_PIN2, result);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        rr.mp.writeInt(1);
+        rr.mp.writeString(pin);
+
+        send(rr);
+    }
+
+    @Override
+    public void
+    supplyIccPukForApp(String puk, String newPin, String aid, Message result) {
+        //Note: This RIL request has not been renamed to ICC,
+        //       but this request is also valid for SIM and RUIM
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_ENTER_SIM_PUK, result);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        rr.mp.writeInt(2);
+        rr.mp.writeString(puk);
+        rr.mp.writeString(newPin);
+
+        send(rr);
+    }
+
+    @Override
+    public void
+    supplyIccPuk2ForApp(String puk, String newPin2, String aid, Message result) {
+        //Note: This RIL request has not been renamed to ICC,
+        //       but this request is also valid for SIM and RUIM
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_ENTER_SIM_PUK2, result);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        rr.mp.writeInt(2);
+        rr.mp.writeString(puk);
+        rr.mp.writeString(newPin2);
+
+        send(rr);
+    }
+
+    @Override
+    public void
+    changeIccPinForApp(String oldPin, String newPin, String aid, Message result) {
+        //Note: This RIL request has not been renamed to ICC,
+        //       but this request is also valid for SIM and RUIM
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_CHANGE_SIM_PIN, result);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        rr.mp.writeInt(2);
+        rr.mp.writeString(oldPin);
+        rr.mp.writeString(newPin);
+
+        send(rr);
+    }
+
+    @Override
+    public void
+    changeIccPin2ForApp(String oldPin2, String newPin2, String aid, Message result) {
+        //Note: This RIL request has not been renamed to ICC,
+        //       but this request is also valid for SIM and RUIM
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_CHANGE_SIM_PIN2, result);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        rr.mp.writeInt(2);
+        rr.mp.writeString(oldPin2);
+        rr.mp.writeString(newPin2);
+
+        send(rr);
+    }
+
+    @Override
+    public void
+    queryFacilityLockForApp(String facility, String password, int serviceClass, String appId,
+                            Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_QUERY_FACILITY_LOCK, response);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        // count strings
+        rr.mp.writeInt(3);
+
+        rr.mp.writeString(facility);
+        rr.mp.writeString(password);
+
+        rr.mp.writeString(Integer.toString(serviceClass));
+
+        send(rr);
+    }
+
+    @Override
+    public void
+    setFacilityLockForApp(String facility, boolean lockState, String password,
+                          int serviceClass, String appId, Message response) {
+        String lockString;
+        RILRequest rr =
+            RILRequest.obtain(RIL_REQUEST_SET_FACILITY_LOCK, response);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        // count strings
+        rr.mp.writeInt(4);
+
+        rr.mp.writeString(facility);
+        lockString = lockState ? "1" : "0";
+        rr.mp.writeString(lockString);
+        rr.mp.writeString(password);
+        rr.mp.writeString(Integer.toString(serviceClass));
+
+        send(rr);
+    }
+
+    @Override
+    protected Object
+    responseIccCardStatus(Parcel p) {
+        IccCardApplication ca;
+
+        IccCardStatus status = new IccCardStatus();
+        status.setCardState(p.readInt());
+        status.setUniversalPinState(p.readInt());
+        status.setGsmUmtsSubscriptionAppIndex(p.readInt());
+        status.setCdmaSubscriptionAppIndex(p.readInt());
+
+        int numApplications = p.readInt();
+
+        // limit to maximum allowed applications
+        if (numApplications > IccCardStatus.CARD_MAX_APPS) {
+            numApplications = IccCardStatus.CARD_MAX_APPS;
+        }
+        status.setNumApplications(numApplications);
+
+        for (int i = 0 ; i < numApplications ; i++) {
+            ca = new IccCardApplication();
+            ca.app_type       = ca.AppTypeFromRILInt(p.readInt());
+            ca.app_state      = ca.AppStateFromRILInt(p.readInt());
+            ca.perso_substate = ca.PersoSubstateFromRILInt(p.readInt());
+            ca.aid            = p.readString();
+            ca.app_label      = p.readString();
+            ca.pin1_replaced  = p.readInt();
+            ca.pin1           = ca.PinStateFromRILInt(p.readInt());
+            ca.pin2           = ca.PinStateFromRILInt(p.readInt());
+            status.addApplication(ca);
+        }
+        return status;
     }
 
     protected class SamsungDriverCall extends DriverCall {
