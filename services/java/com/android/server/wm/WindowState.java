@@ -85,6 +85,7 @@ final class WindowState implements WindowManagerPolicy.WindowState {
     boolean mPolicyVisibilityAfterAnim = true;
     boolean mAppFreezing;
     Surface mSurface;
+    Surface mPendingDestroySurface;
     boolean mReportDestroySurface;
     boolean mSurfacePendingDestroy;
     boolean mAttachedHidden;    // is our parent window hidden?
@@ -121,7 +122,13 @@ final class WindowState implements WindowManagerPolicy.WindowState {
      * we must tell them application to resize (and thus redraw itself).
      */
     boolean mSurfaceResized;
-    
+
+    /**
+     * Set if the client has asked that the destroy of its surface be delayed
+     * until it explicitly says it is okay.
+     */
+    boolean mSurfaceDestroyDeferred;
+
     /**
      * Insets that determine the actually visible area.  These are in the application's
      * coordinate space (without compatibility scale applied).
@@ -230,6 +237,12 @@ final class WindowState implements WindowManagerPolicy.WindowState {
     // where we don't yet have a surface, but should have one soon, so
     // we can give the window focus before waiting for the relayout.
     boolean mRelayoutCalled;
+
+    // If the application has called relayout() with changes that can
+    // impact its window's size, we need to perform a layout pass on it
+    // even if it is not currently visible for layout.  This is set
+    // when in that case until the layout is done.
+    boolean mLayoutNeeded;
 
     // This is set after the Surface has been created but before the
     // window has been drawn.  During this time the surface is hidden.
@@ -555,6 +568,33 @@ final class WindowState implements WindowManagerPolicy.WindowState {
         return mAttrs;
     }
 
+    public boolean getNeedsMenuLw(WindowManagerPolicy.WindowState bottom) {
+        int index = -1;
+        WindowState ws = this;
+        while (true) {
+            if ((ws.mAttrs.privateFlags
+                    & WindowManager.LayoutParams.PRIVATE_FLAG_SET_NEEDS_MENU_KEY) != 0) {
+                return (ws.mAttrs.flags & WindowManager.LayoutParams.FLAG_NEEDS_MENU_KEY) != 0;
+            }
+            // If we reached the bottom of the range of windows we are considering,
+            // assume no menu is needed.
+            if (ws == bottom) {
+                return false;
+            }
+            // The current window hasn't specified whether menu key is needed;
+            // look behind it.
+            // First, we may need to determine the starting position.
+            if (index < 0) {
+                index = mService.mWindows.indexOf(ws);
+            }
+            index--;
+            if (index < 0) {
+                return false;
+            }
+            ws = mService.mWindows.get(index);
+        }
+    }
+
     public int getSystemUiVisibility() {
         return mSystemUiVisibility;
     }
@@ -596,11 +636,24 @@ final class WindowState implements WindowManagerPolicy.WindowState {
         }
     }
 
+    // TODO: Fix and call finishExit() instead of cancelExitAnimationForNextAnimationLocked()
+    // for avoiding the code duplication.
+    void cancelExitAnimationForNextAnimationLocked() {
+        if (!mExiting) return;
+        if (mAnimation != null) {
+            mAnimation.cancel();
+            mAnimation = null;
+            destroySurfaceLocked();
+        }
+        mExiting = false;
+    }
+
     Surface createSurfaceLocked() {
         if (mSurface == null) {
             mReportDestroySurface = false;
             mSurfacePendingDestroy = false;
-            Slog.i(WindowManagerService.TAG, "createSurface " + this + ": DRAW NOW PENDING");
+            if (WindowManagerService.DEBUG_ORIENTATION) Slog.i(WindowManagerService.TAG,
+                    "createSurface " + this + ": DRAW NOW PENDING");
             mDrawPending = true;
             mCommitDrawPending = false;
             mReadyToShow = false;
@@ -751,15 +804,32 @@ final class WindowState implements WindowManagerPolicy.WindowState {
                     Slog.w(WindowManagerService.TAG, "Window " + this + " destroying surface "
                             + mSurface + ", session " + mSession, e);
                 }
-                if (SHOW_TRANSACTIONS || SHOW_SURFACE_ALLOC) {
-                    RuntimeException e = null;
-                    if (!WindowManagerService.HIDE_STACK_CRAWLS) {
-                        e = new RuntimeException();
-                        e.fillInStackTrace();
+                if (mSurfaceDestroyDeferred) {
+                    if (mSurface != null && mPendingDestroySurface != mSurface) {
+                        if (mPendingDestroySurface != null) {
+                            if (SHOW_TRANSACTIONS || SHOW_SURFACE_ALLOC) {
+                                RuntimeException e = null;
+                                if (!WindowManagerService.HIDE_STACK_CRAWLS) {
+                                    e = new RuntimeException();
+                                    e.fillInStackTrace();
+                                }
+                                WindowManagerService.logSurface(this, "DESTROY PENDING", e);
+                            }
+                            mPendingDestroySurface.destroy();
+                        }
+                        mPendingDestroySurface = mSurface;
                     }
-                    WindowManagerService.logSurface(this, "DESTROY", e);
+                } else {
+                    if (SHOW_TRANSACTIONS || SHOW_SURFACE_ALLOC) {
+                        RuntimeException e = null;
+                        if (!WindowManagerService.HIDE_STACK_CRAWLS) {
+                            e = new RuntimeException();
+                            e.fillInStackTrace();
+                        }
+                        WindowManagerService.logSurface(this, "DESTROY", e);
+                    }
+                    mSurface.destroy();
                 }
-                mSurface.destroy();
             } catch (RuntimeException e) {
                 Slog.w(WindowManagerService.TAG, "Exception thrown when destroying Window " + this
                     + " surface " + mSurface + " session " + mSession
@@ -769,6 +839,28 @@ final class WindowState implements WindowManagerPolicy.WindowState {
             mSurfaceShown = false;
             mSurface = null;
         }
+    }
+
+    void destroyDeferredSurfaceLocked() {
+        try {
+            if (mPendingDestroySurface != null) {
+                if (SHOW_TRANSACTIONS || SHOW_SURFACE_ALLOC) {
+                    RuntimeException e = null;
+                    if (!WindowManagerService.HIDE_STACK_CRAWLS) {
+                        e = new RuntimeException();
+                        e.fillInStackTrace();
+                    }
+                    mService.logSurface(this, "DESTROY PENDING", e);
+                }
+                mPendingDestroySurface.destroy();
+            }
+        } catch (RuntimeException e) {
+            Slog.w(WindowManagerService.TAG, "Exception thrown when destroying Window "
+                    + this + " surface " + mPendingDestroySurface
+                    + " session " + mSession + ": " + e.toString());
+        }
+        mSurfaceDestroyDeferred = false;
+        mPendingDestroySurface = null;
     }
 
     boolean finishDrawingLocked() {
@@ -963,6 +1055,9 @@ final class WindowState implements WindowManagerPolicy.WindowState {
         if (mAnimation != null) {
             mAnimation.cancel();
             mAnimation = null;
+        }
+        if (mService.mWindowDetachedWallpaper == this) {
+            mService.mWindowDetachedWallpaper = null;
         }
         mAnimLayer = mLayer;
         if (mIsImWindow) {
@@ -1355,6 +1450,16 @@ final class WindowState implements WindowManagerPolicy.WindowState {
                     || mAnimating);
     }
 
+    public boolean isGoneForLayoutLw() {
+        final AppWindowToken atoken = mAppToken;
+        return mViewVisibility == View.GONE
+                || !mRelayoutCalled
+                || (atoken == null && mRootToken.hidden)
+                || (atoken != null && (atoken.hiddenRequested || atoken.hidden))
+                || mAttachedHidden
+                || mExiting || mDestroying;
+    }
+
     /**
      * Returns true if the window has a surface that it has drawn a
      * complete UI in to.
@@ -1402,6 +1507,7 @@ final class WindowState implements WindowManagerPolicy.WindowState {
             if (WindowManagerService.DEBUG_ADD_REMOVE) Slog.v(WindowManagerService.TAG, "Removing " + this + " from " + mAttachedWindow);
             mAttachedWindow.mChildWindows.remove(this);
         }
+        destroyDeferredSurfaceLocked();
         destroySurfaceLocked();
         mSession.windowRemovedLocked();
         try {
@@ -1599,6 +1705,10 @@ final class WindowState implements WindowManagerPolicy.WindowState {
                     pw.print(") "); pw.print(mSurfaceW);
                     pw.print(" x "); pw.println(mSurfaceH);
         }
+        if (mPendingDestroySurface != null) {
+            pw.print(prefix); pw.print("mPendingDestroySurface=");
+                    pw.println(mPendingDestroySurface);
+        }
         if (dumpAll) {
             pw.print(prefix); pw.print("mToken="); pw.println(mToken);
             pw.print(prefix); pw.print("mRootToken="); pw.println(mRootToken);
@@ -1624,8 +1734,13 @@ final class WindowState implements WindowManagerPolicy.WindowState {
                     pw.print(mPolicyVisibilityAfterAnim);
                     pw.print(" mAttachedHidden="); pw.println(mAttachedHidden);
         }
-        if (!mRelayoutCalled) {
-            pw.print(prefix); pw.print("mRelayoutCalled="); pw.println(mRelayoutCalled);
+        if (!mRelayoutCalled || mLayoutNeeded) {
+            pw.print(prefix); pw.print("mRelayoutCalled="); pw.print(mRelayoutCalled);
+                    pw.print(" mLayoutNeeded="); pw.println(mLayoutNeeded);
+        }
+        if (mSurfaceResized || mSurfaceDestroyDeferred) {
+            pw.print(prefix); pw.print("mSurfaceResized="); pw.print(mSurfaceResized);
+                    pw.print(" mSurfaceDestroyDeferred="); pw.println(mSurfaceDestroyDeferred);
         }
         if (mXOffset != 0 || mYOffset != 0) {
             pw.print(prefix); pw.print("Offsets x="); pw.print(mXOffset);

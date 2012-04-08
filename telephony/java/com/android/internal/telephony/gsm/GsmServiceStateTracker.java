@@ -270,6 +270,9 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                 break;
 
             case EVENT_SIM_READY:
+                // Set the network type, in case the radio does not restore it.
+                cm.setCurrentPreferredNetworkType();
+
                 // The SIM is now ready i.e if it was locked
                 // it has been unlocked. At this stage, the radio is already
                 // powered on.
@@ -668,7 +671,9 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
     }
 
     private void setSignalStrengthDefaultValues() {
-        mSignalStrength = new SignalStrength(99, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, true);
+        // TODO Make a constructor only has boolean gsm as parameter
+        mSignalStrength = new SignalStrength(99, -1, -1, -1, -1, -1, -1,
+                -1, -1, -1, SignalStrength.INVALID_SNR, -1, true);
     }
 
     /**
@@ -1020,7 +1025,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
         int lteSignalStrength = -1;
         int lteRsrp = -1;
         int lteRsrq = -1;
-        int lteRssnr = -1;
+        int lteRssnr = SignalStrength.INVALID_SNR;
         int lteCqi = -1;
 
         if (ar.exception != null) {

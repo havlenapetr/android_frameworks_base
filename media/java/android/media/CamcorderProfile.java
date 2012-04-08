@@ -20,12 +20,12 @@ import android.hardware.Camera;
 import android.hardware.Camera.CameraInfo;
 
 /**
- * The CamcorderProfile class is used to retrieve the
+ * Retrieves the
  * predefined camcorder profile settings for camcorder applications.
  * These settings are read-only.
  *
- * The compressed output from a recording session with a given
- * CamcorderProfile contains two tracks: one for auido and one for video.
+ * <p>The compressed output from a recording session with a given
+ * CamcorderProfile contains two tracks: one for audio and one for video.
  *
  * <p>Each profile specifies the following set of parameters:
  * <ul>
@@ -82,7 +82,6 @@ public class CamcorderProfile
 
     /**
      * Quality level corresponding to the QVGA (320x240) resolution.
-     * {@hide}
      */
     public static final int QUALITY_QVGA = 7;
 
@@ -127,7 +126,6 @@ public class CamcorderProfile
 
     /**
      * Time lapse quality level corresponding to the QVGA (320 x 240) resolution.
-     * {@hide}
      */
     public static final int QUALITY_TIME_LAPSE_QVGA = 1007;
 

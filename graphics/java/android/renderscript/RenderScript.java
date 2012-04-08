@@ -32,13 +32,16 @@ import android.view.Surface;
 
 
 /**
- * RenderScript base master class.  An instance of this class creates native
+ * Renderscript base master class.  An instance of this class creates native
  * worker threads for processing commands from this object.  This base class
  * does not provide any extended capabilities beyond simple data processing.
  * For extended capabilities use derived classes such as RenderScriptGL.
  *
- *
- *
+ * <div class="special reference">
+ * <h3>Developer Guides</h3>
+ * <p>For more information about creating an application that uses Renderscript, read the
+ * <a href="{@docRoot}guide/topics/graphics/renderscript.html">Renderscript</a> developer guide.</p>
+ * </div>
  **/
 public class RenderScript {
     static final String LOG_TAG = "RenderScript_jni";
@@ -210,10 +213,11 @@ public class RenderScript {
         validate();
         rsnElementGetNativeData(mContext, id, elementData);
     }
-    native void rsnElementGetSubElements(int con, int id, int[] IDs, String[] names);
-    synchronized void nElementGetSubElements(int id, int[] IDs, String[] names) {
+    native void rsnElementGetSubElements(int con, int id,
+                                         int[] IDs, String[] names, int[] arraySizes);
+    synchronized void nElementGetSubElements(int id, int[] IDs, String[] names, int[] arraySizes) {
         validate();
-        rsnElementGetSubElements(mContext, id, IDs, names);
+        rsnElementGetSubElements(mContext, id, IDs, names, arraySizes);
     }
 
     native int rsnTypeCreate(int con, int eid, int x, int y, int z, boolean mips, boolean faces);

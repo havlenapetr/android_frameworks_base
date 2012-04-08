@@ -350,6 +350,12 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
             mScreenOn = false;
             if (DEBUG) Log.d(TAG, "onScreenTurnedOff(" + why + ")");
 
+            // Lock immediately based on setting if secure (user has a pin/pattern/password).
+            // This also "locks" the device when not secure to provide easy access to the
+            // camera while preventing unwanted input.
+            final boolean lockImmediately =
+                mLockPatternUtils.getPowerButtonInstantlyLocks() || !mLockPatternUtils.isSecure();
+
             if (mExitSecureCallback != null) {
                 if (DEBUG) Log.d(TAG, "pending exit secure callback cancelled");
                 mExitSecureCallback.onKeyguardExitResult(false);
@@ -360,8 +366,10 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
             } else if (mShowing) {
                 notifyScreenOffLocked();
                 resetStateLocked();
-            } else if (why == WindowManagerPolicy.OFF_BECAUSE_OF_TIMEOUT) {
-                // if the screen turned off because of timeout, set an alarm
+            } else if (why == WindowManagerPolicy.OFF_BECAUSE_OF_TIMEOUT
+                   || (why == WindowManagerPolicy.OFF_BECAUSE_OF_USER && !lockImmediately)) {
+                // if the screen turned off because of timeout or the user hit the power button
+                // and we don't need to lock immediately, set an alarm
                 // to enable it a little bit later (i.e, give the user a chance
                 // to turn the screen back on within a certain window without
                 // having to unlock the screen)
@@ -400,8 +408,7 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
                     intent.putExtra("seq", mDelayedShowingSequence);
                     PendingIntent sender = PendingIntent.getBroadcast(mContext,
                             0, intent, PendingIntent.FLAG_CANCEL_CURRENT);
-                    mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, when,
-                            sender);
+                    mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, when, sender);
                     if (DEBUG) Log.d(TAG, "setting alarm to turn off keyguard, seq = "
                                      + mDelayedShowingSequence);
                 }
@@ -830,12 +837,13 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
      * action should be posted to a handler.
      *
      * @param keyCode The keycode of the key that woke the device
+     * @param isDocked True if the device is in the dock
      * @return Whether we poked the wake lock (and turned the screen on)
      */
-    public boolean onWakeKeyWhenKeyguardShowingTq(int keyCode) {
+    public boolean onWakeKeyWhenKeyguardShowingTq(int keyCode, boolean isDocked) {
         if (DEBUG) Log.d(TAG, "onWakeKeyWhenKeyguardShowing(" + keyCode + ")");
 
-        if (isWakeKeyWhenKeyguardShowing(keyCode)) {
+        if (isWakeKeyWhenKeyguardShowing(keyCode, isDocked)) {
             // give the keyguard view manager a chance to adjust the state of the
             // keyguard based on the key that woke the device before poking
             // the wake lock
@@ -846,11 +854,22 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
         }
     }
 
-    private boolean isWakeKeyWhenKeyguardShowing(int keyCode) {
+    /**
+     * When the keyguard is showing we ignore some keys that might otherwise typically
+     * be considered wake keys.  We filter them out here.
+     *
+     * {@link KeyEvent#KEYCODE_POWER} is notably absent from this list because it
+     * is always considered a wake key.
+     */
+    private boolean isWakeKeyWhenKeyguardShowing(int keyCode, boolean isDocked) {
         switch (keyCode) {
+            // ignore volume keys unless docked
             case KeyEvent.KEYCODE_VOLUME_UP:
             case KeyEvent.KEYCODE_VOLUME_DOWN:
             case KeyEvent.KEYCODE_VOLUME_MUTE:
+                return isDocked;
+
+            // ignore media and camera keys
             case KeyEvent.KEYCODE_MUTE:
             case KeyEvent.KEYCODE_HEADSETHOOK:
             case KeyEvent.KEYCODE_MEDIA_PLAY:

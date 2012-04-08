@@ -24,6 +24,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
 import android.database.Cursor;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -47,10 +48,11 @@ import java.util.List;
  * {@link android.content.Context#getSystemService
  * context.getSystemService(Context.SEARCH_SERVICE)}.
  *
- * <div class="special">
- * <p>For a guide to using the search dialog and adding search
- * suggestions in your application, see the Dev Guide topic about <strong><a
- * href="{@docRoot}guide/topics/search/index.html">Search</a></strong>.</p>
+ * <div class="special reference">
+ * <h3>Developer Guides</h3>
+ * <p>For more information about using the search dialog and adding search
+ * suggestions in your application, read the
+ * <a href="{@docRoot}guide/topics/search/index.html">Search</a> developer guide.</p>
  * </div>
  */
 public class SearchManager
@@ -498,8 +500,24 @@ public class SearchManager
                             ComponentName launchActivity,
                             Bundle appSearchData,
                             boolean globalSearch) {
+        startSearch(initialQuery, selectInitialQuery, launchActivity,
+                appSearchData, globalSearch, null);
+    }
+
+    /**
+     * As {@link #startSearch(String, boolean, ComponentName, Bundle, boolean)} but including
+     * source bounds for the global search intent.
+     *
+     * @hide
+     */
+    public void startSearch(String initialQuery,
+                            boolean selectInitialQuery,
+                            ComponentName launchActivity,
+                            Bundle appSearchData,
+                            boolean globalSearch,
+                            Rect sourceBounds) {
         if (globalSearch) {
-            startGlobalSearch(initialQuery, selectInitialQuery, appSearchData);
+            startGlobalSearch(initialQuery, selectInitialQuery, appSearchData, sourceBounds);
             return;
         }
 
@@ -520,7 +538,7 @@ public class SearchManager
      * Starts the global search activity.
      */
     /* package */ void startGlobalSearch(String initialQuery, boolean selectInitialQuery,
-            Bundle appSearchData) {
+            Bundle appSearchData, Rect sourceBounds) {
         ComponentName globalSearchActivity = getGlobalSearchActivity();
         if (globalSearchActivity == null) {
             Log.w(TAG, "No global search activity found.");
@@ -546,6 +564,7 @@ public class SearchManager
         if (selectInitialQuery) {
             intent.putExtra(EXTRA_SELECT_QUERY, selectInitialQuery);
         }
+        intent.setSourceBounds(sourceBounds);
         try {
             if (DBG) Log.d(TAG, "Starting global search: " + intent.toUri(0));
             mContext.startActivity(intent);

@@ -30,7 +30,13 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 /**
- * The Surface View for a graphics renderscript (RenderScriptGL) to draw on. 
+ * The Surface View for a graphics renderscript (RenderScriptGL) to draw on.
+ *
+ * <div class="special reference">
+ * <h3>Developer Guides</h3>
+ * <p>For more information about creating an application that uses Renderscript, read the
+ * <a href="{@docRoot}guide/topics/graphics/renderscript.html">Renderscript</a> developer guide.</p>
+ * </div>
  */
 public class RSSurfaceView extends SurfaceView implements SurfaceHolder.Callback {
     private SurfaceHolder mSurfaceHolder;
@@ -78,9 +84,11 @@ public class RSSurfaceView extends SurfaceView implements SurfaceHolder.Callback
      * not normally called or subclassed by clients of RSSurfaceView.
      */
     public void surfaceDestroyed(SurfaceHolder holder) {
-        // Surface will be destroyed when we return
-        if (mRS != null) {
-            mRS.setSurface(null, 0, 0);
+        synchronized (this) {
+            // Surface will be destroyed when we return
+            if (mRS != null) {
+                mRS.setSurface(null, 0, 0);
+            }
         }
     }
 
@@ -89,8 +97,10 @@ public class RSSurfaceView extends SurfaceView implements SurfaceHolder.Callback
      * not normally called or subclassed by clients of RSSurfaceView.
      */
     public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
-        if (mRS != null) {
-            mRS.setSurface(holder, w, h);
+        synchronized (this) {
+            if (mRS != null) {
+                mRS.setSurface(holder, w, h);
+            }
         }
     }
 
@@ -126,8 +136,10 @@ public class RSSurfaceView extends SurfaceView implements SurfaceHolder.Callback
     }
 
     public void destroyRenderScriptGL() {
-        mRS.destroy();
-        mRS = null;
+        synchronized (this) {
+            mRS.destroy();
+            mRS = null;
+        }
     }
 
     public void setRenderScriptGL(RenderScriptGL rs) {

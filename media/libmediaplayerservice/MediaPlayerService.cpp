@@ -320,7 +320,7 @@ status_t MediaPlayerService::AudioOutput::dump(int fd, const Vector<String16>& a
             mStreamType, mLeftVolume, mRightVolume);
     result.append(buffer);
     snprintf(buffer, 255, "  msec per frame(%f), latency (%d)\n",
-            mMsecsPerFrame, mLatency);
+            mMsecsPerFrame, (mTrack != 0) ? mTrack->latency() : -1);
     result.append(buffer);
     snprintf(buffer, 255, "  aux effect id(%d), send level (%f)\n",
             mAuxEffectId, mSendLevel);
@@ -589,6 +589,10 @@ player_type getPlayerType(const char* url)
         }
     }
 
+    if (!strncasecmp("rtsp://", url, 7)) {
+        return NU_PLAYER;
+    }
+
     // use MidiFile for MIDI extensions
     int lenURL = strlen(url);
     for (int i = 0; i < NELEM(FILE_EXTS); ++i) {
@@ -782,14 +786,6 @@ status_t MediaPlayerService::Client::setDataSource(
     }
 
     return mStatus;
-}
-
-status_t MediaPlayerService::Client::setVideoSurface(const sp<Surface>& surface)
-{
-    LOGV("[%d] setVideoSurface(%p)", mConnId, surface.get());
-    sp<MediaPlayerBase> p = getPlayer();
-    if (p == 0) return UNKNOWN_ERROR;
-    return p->setVideoSurface(surface);
 }
 
 void MediaPlayerService::Client::disconnectNativeWindow() {
@@ -1269,7 +1265,6 @@ MediaPlayerService::AudioOutput::AudioOutput(int sessionId)
     mStreamType = AUDIO_STREAM_MUSIC;
     mLeftVolume = 1.0;
     mRightVolume = 1.0;
-    mLatency = 0;
     mMsecsPerFrame = 0;
     mAuxEffectId = 0;
     mSendLevel = 0.0;
@@ -1328,7 +1323,8 @@ ssize_t MediaPlayerService::AudioOutput::frameSize() const
 
 uint32_t MediaPlayerService::AudioOutput::latency () const
 {
-    return mLatency;
+    if (mTrack == 0) return 0;
+    return mTrack->latency();
 }
 
 float MediaPlayerService::AudioOutput::msecsPerFrame() const
@@ -1407,7 +1403,6 @@ status_t MediaPlayerService::AudioOutput::open(
     t->setVolume(mLeftVolume, mRightVolume);
 
     mMsecsPerFrame = 1.e3 / (float) sampleRate;
-    mLatency = t->latency();
     mTrack = t;
 
     t->setAuxEffectSendLevel(mSendLevel);

@@ -62,6 +62,8 @@ public class ConnectivityManagerTestActivity extends Activity {
     public static final int WIFI_SCAN_TIMEOUT = 50 * 1000;
     public static final int SHORT_TIMEOUT = 5 * 1000;
     public static final long LONG_TIMEOUT = 50 * 1000;
+    // 2 minutes timer between wifi stop and start
+    public static final long  WIFI_STOP_START_INTERVAL = 2 * 60 * 1000;
     public static final int SUCCESS = 0;  // for Wifi tethering state change
     public static final int FAILURE = 1;
     public static final int INIT = -1;

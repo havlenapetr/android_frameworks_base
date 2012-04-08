@@ -112,7 +112,6 @@ class MediaPlayerService : public BnMediaPlayerService
         float                   mLeftVolume;
         float                   mRightVolume;
         float                   mMsecsPerFrame;
-        uint32_t                mLatency;
         int                     mSessionId;
         float                   mSendLevel;
         int                     mAuxEffectId;
@@ -248,7 +247,6 @@ private:
 
         // IMediaPlayer interface
         virtual void            disconnect();
-        virtual status_t        setVideoSurface(const sp<Surface>& surface);
         virtual status_t        setVideoSurfaceTexture(
                                         const sp<ISurfaceTexture>& surfaceTexture);
         virtual status_t        prepareAsync();

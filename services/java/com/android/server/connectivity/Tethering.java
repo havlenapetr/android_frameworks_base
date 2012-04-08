@@ -55,6 +55,7 @@ import com.google.android.collect.Lists;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.net.InetAddress;
+import java.net.Inet4Address;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -73,7 +74,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
     private Context mContext;
     private final static String TAG = "Tethering";
     private final static boolean DBG = true;
-    private final static boolean VDBG = true;
+    private final static boolean VDBG = false;
 
     // TODO - remove both of these - should be part of interface inspection/selection stuff
     private String[] mTetherableUsbRegexs;
@@ -118,7 +119,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
         "192.168.48.2", "192.168.48.254",
     };
 
-    private String[] mDnsServers;
+    private String[] mDefaultDnsServers;
     private static final String DNS_DEFAULT_SERVER1 = "8.8.8.8";
     private static final String DNS_DEFAULT_SERVER2 = "8.8.4.4";
 
@@ -171,9 +172,9 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
         updateConfiguration();
 
         // TODO - remove and rely on real notifications of the current iface
-        mDnsServers = new String[2];
-        mDnsServers[0] = DNS_DEFAULT_SERVER1;
-        mDnsServers[1] = DNS_DEFAULT_SERVER2;
+        mDefaultDnsServers = new String[2];
+        mDefaultDnsServers[0] = DNS_DEFAULT_SERVER1;
+        mDefaultDnsServers[1] = DNS_DEFAULT_SERVER2;
     }
 
     void updateConfiguration() {
@@ -228,7 +229,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
                 if (isUsb(iface)) {
                     // ignore usb0 down after enabling RNDIS
                     // we will handle disconnect in interfaceRemoved instead
-                    if (VDBG) Log.d(TAG, "ignoring interface down for " + iface);
+                    if (VDBG) Log.d(TAG, "ignore interface down for " + iface);
                 } else if (sm != null) {
                     sm.sendMessage(TetherInterfaceSM.CMD_INTERFACE_DOWN);
                     mIfaces.remove(iface);
@@ -298,7 +299,6 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
             mIfaces.put(iface, sm);
             sm.start();
         }
-        if (VDBG) Log.d(TAG, "interfaceAdded :" + iface);
     }
 
     public void interfaceRemoved(String iface) {
@@ -415,7 +415,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
         broadcast.putStringArrayListExtra(ConnectivityManager.EXTRA_ERRORED_TETHER,
                 erroredList);
         mContext.sendStickyBroadcast(broadcast);
-        if (VDBG) {
+        if (DBG) {
             Log.d(TAG, "sendTetherStateChangedBroadcast " + availableList.size() + ", " +
                     activeList.size() + ", " + erroredList.size());
         }
@@ -865,7 +865,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
 
             @Override
             public boolean processMessage(Message message) {
-                if (VDBG) Log.d(TAG, "InitialState.processMessage what=" + message.what);
+                if (DBG) Log.d(TAG, "InitialState.processMessage what=" + message.what);
                 boolean retValue = true;
                 switch (message.what) {
                     case CMD_TETHER_REQUESTED:
@@ -906,7 +906,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
             }
             @Override
             public boolean processMessage(Message message) {
-                if (VDBG) Log.d(TAG, "StartingState.processMessage what=" + message.what);
+                if (DBG) Log.d(TAG, "StartingState.processMessage what=" + message.what);
                 boolean retValue = true;
                 switch (message.what) {
                     // maybe a parent class?
@@ -985,7 +985,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
 
             @Override
             public boolean processMessage(Message message) {
-                if (VDBG) Log.d(TAG, "TetheredState.processMessage what=" + message.what);
+                if (DBG) Log.d(TAG, "TetheredState.processMessage what=" + message.what);
                 boolean retValue = true;
                 boolean error = false;
                 switch (message.what) {
@@ -1061,7 +1061,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
                                     ConnectivityManager.TETHER_ERROR_MASTER_ERROR);
                             break;
                         }
-                        if (VDBG) Log.d(TAG, "Tether lost upstream connection " + mIfaceName);
+                        if (DBG) Log.d(TAG, "Tether lost upstream connection " + mIfaceName);
                         sendTetherStateChangedBroadcast();
                         if (mUsb) {
                             if (!Tethering.this.configureUsbIface(false)) {
@@ -1246,7 +1246,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
                     }
                 }
                 try {
-                    mNMService.setDnsForwarders(mDnsServers);
+                    mNMService.setDnsForwarders(mDefaultDnsServers);
                 } catch (Exception e) {
                     transitionTo(mSetDnsForwardersErrorState);
                     return false;
@@ -1296,7 +1296,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
                     }
                 }
 
-                if (VDBG) {
+                if (DBG) {
                     Log.d(TAG, "chooseUpstreamType(" + tryCell + "), preferredApn ="
                             + mPreferredUpstreamMobileApn + ", got type=" + upType);
                 }
@@ -1322,13 +1322,35 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
                     try {
                         linkProperties = mConnService.getLinkProperties(upType);
                     } catch (RemoteException e) { }
-                    if (linkProperties != null) iface = linkProperties.getInterfaceName();
+                    if (linkProperties != null) {
+                        iface = linkProperties.getInterfaceName();
+                        String[] dnsServers = mDefaultDnsServers;
+                        Collection<InetAddress> dnses = linkProperties.getDnses();
+                        if (dnses != null) {
+                            // we currently only handle IPv4
+                            ArrayList<InetAddress> v4Dnses =
+                                    new ArrayList<InetAddress>(dnses.size());
+                            for (InetAddress dnsAddress : dnses) {
+                                if (dnsAddress instanceof Inet4Address) {
+                                    v4Dnses.add(dnsAddress);
+                                }
+                            }
+                            if (v4Dnses.size() > 0) {
+                                dnsServers = NetworkUtils.makeStrings(v4Dnses);
+                            }
+                        }
+                        try {
+                            mNMService.setDnsForwarders(dnsServers);
+                        } catch (Exception e) {
+                            transitionTo(mSetDnsForwardersErrorState);
+                        }
+                    }
                 }
                 notifyTetheredOfNewUpstreamIface(iface);
             }
 
             protected void notifyTetheredOfNewUpstreamIface(String ifaceName) {
-                if (VDBG) Log.d(TAG, "notifying tethered with iface =" + ifaceName);
+                if (DBG) Log.d(TAG, "notifying tethered with iface =" + ifaceName);
                 mUpstreamIfaceName = ifaceName;
                 for (Object o : mNotifyList) {
                     TetherInterfaceSM sm = (TetherInterfaceSM)o;
@@ -1344,7 +1366,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
             }
             @Override
             public boolean processMessage(Message message) {
-                if (VDBG) Log.d(TAG, "MasterInitialState.processMessage what=" + message.what);
+                if (DBG) Log.d(TAG, "MasterInitialState.processMessage what=" + message.what);
                 boolean retValue = true;
                 switch (message.what) {
                     case CMD_TETHER_MODE_REQUESTED:
@@ -1373,11 +1395,12 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
             boolean mTryCell = !WAIT_FOR_NETWORK_TO_SETTLE;
             @Override
             public void enter() {
+                turnOnMasterTetherSettings(); // may transition us out
+
                 mTryCell = !WAIT_FOR_NETWORK_TO_SETTLE; // better try something first pass
                                                         // or crazy tests cases will fail
                 chooseUpstreamType(mTryCell);
                 mTryCell = !mTryCell;
-                turnOnMasterTetherSettings(); // may transition us out
             }
             @Override
             public void exit() {
@@ -1386,7 +1409,7 @@ public class Tethering extends INetworkManagementEventObserver.Stub {
             }
             @Override
             public boolean processMessage(Message message) {
-                if (VDBG) Log.d(TAG, "TetherModeAliveState.processMessage what=" + message.what);
+                if (DBG) Log.d(TAG, "TetherModeAliveState.processMessage what=" + message.what);
                 boolean retValue = true;
                 switch (message.what) {
                     case CMD_TETHER_MODE_REQUESTED:

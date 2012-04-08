@@ -44,6 +44,10 @@ import com.android.bandwidthtest.NetworkState;
 import com.android.bandwidthtest.NetworkState.StateTransitionDirection;
 import com.android.internal.util.AsyncChannel;
 
+import junit.framework.Assert;
+
+import java.io.IOException;
+import java.net.UnknownHostException;
 import java.util.List;
 
 /*
@@ -55,7 +59,7 @@ public class ConnectionUtil {
     private static final int WAIT_FOR_SCAN_RESULT = 10 * 1000; // 10 seconds
     private static final int WIFI_SCAN_TIMEOUT = 50 * 1000;
     public static final int SHORT_TIMEOUT = 5 * 1000;
-    public static final int LONG_TIMEOUT = 10 * 1000;
+    public static final int LONG_TIMEOUT = 5 * 60 * 1000; // 5 minutes
     private ConnectivityReceiver mConnectivityReceiver = null;
     private WifiReceiver mWifiReceiver = null;
     private DownloadReceiver mDownloadReceiver = null;
@@ -116,8 +120,14 @@ public class ConnectionUtil {
 
         initializeNetworkStates();
 
-        mWifiManager.setWifiEnabled(true);
 
+    }
+
+    /**
+     * Additional initialization needed for wifi related tests.
+     */
+    public void wifiTestInit() {
+        mWifiManager.setWifiEnabled(true);
         Log.v(LOG_TAG, "Clear Wifi before we start the test.");
         sleep(SHORT_TIMEOUT);
         removeConfiguredNetworksAndDisableWifi();
@@ -144,10 +154,10 @@ public class ConnectionUtil {
                 Log.v("ConnectivityReceiver", "onReceive() called with " + intent);
                 return;
             }
-            if (intent.hasExtra(ConnectivityManager.EXTRA_NETWORK_INFO)) {
-                mNetworkInfo = (NetworkInfo)
-                        intent.getParcelableExtra(ConnectivityManager.EXTRA_NETWORK_INFO);
-            }
+
+            final ConnectivityManager connManager = (ConnectivityManager) context
+                    .getSystemService(Context.CONNECTIVITY_SERVICE);
+            mNetworkInfo = connManager.getActiveNetworkInfo();
 
             if (intent.hasExtra(ConnectivityManager.EXTRA_OTHER_NETWORK_INFO)) {
                 mOtherNetworkInfo = (NetworkInfo)
@@ -257,14 +267,14 @@ public class ConnectionUtil {
         mConnectivityState[networkType].recordState(networkState);
     }
 
-   /**
-    * Set the state transition criteria
-    *
-    * @param networkType
-    * @param initState
-    * @param transitionDir
-    * @param targetState
-    */
+    /**
+     * Set the state transition criteria
+     *
+     * @param networkType
+     * @param initState
+     * @param transitionDir
+     * @param targetState
+     */
     public void setStateTransitionCriteria(int networkType, State initState,
             StateTransitionDirection transitionDir, State targetState) {
         mConnectivityState[networkType].setStateTransitionCriteria(
@@ -445,6 +455,17 @@ public class ConnectionUtil {
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
+                if (mNetworkInfo == null) {
+                    Log.v(LOG_TAG, "Do not have networkInfo! Force fetch of network info.");
+                    mNetworkInfo = mCM.getActiveNetworkInfo();
+                }
+                // Still null after force fetch? Maybe the network did not have time to be brought
+                // up yet.
+                if (mNetworkInfo == null) {
+                    Log.v(LOG_TAG, "Failed to force fetch networkInfo. " +
+                            "The network is still not ready. Wait for the next broadcast");
+                    continue;
+                }
                 if ((mNetworkInfo.getType() != networkType) ||
                         (mNetworkInfo.getState() != expectedState)) {
                     Log.v(LOG_TAG, "network state for " + mNetworkInfo.getType() +
@@ -495,7 +516,8 @@ public class ConnectionUtil {
      * @return true if connected to a mobile network, false otherwise.
      */
     public boolean isConnectedToMobile() {
-        return (mNetworkInfo.getType() == ConnectivityManager.TYPE_MOBILE);
+        NetworkInfo networkInfo = mCM.getNetworkInfo(ConnectivityManager.TYPE_MOBILE);
+        return networkInfo.isConnected();
     }
 
     /**
@@ -503,9 +525,9 @@ public class ConnectionUtil {
      * @return true if connected to wifi, false otherwise.
      */
     public boolean isConnectedToWifi() {
-        return (mNetworkInfo.getType() == ConnectivityManager.TYPE_WIFI);
+        NetworkInfo networkInfo = mCM.getNetworkInfo(ConnectivityManager.TYPE_WIFI);
+        return networkInfo.isConnected();
     }
-
 
     /**
      * Associate the device to given SSID
@@ -522,7 +544,7 @@ public class ConnectionUtil {
     /**
      * Connect to Wi-Fi with the given configuration.
      * @param config
-     * @return true if we ar connected to a given
+     * @return true if we are connected to a given AP.
      */
     public boolean connectToWifiWithConfiguration(WifiConfiguration config) {
         //  The SSID in the configuration is a pure string, need to convert it to a quoted string.
@@ -680,5 +702,31 @@ public class ConnectionUtil {
             mContext.unregisterReceiver(mDownloadReceiver);
         }
         Log.v(LOG_TAG, "onDestroy, inst=" + Integer.toHexString(hashCode()));
+    }
+
+    /**
+     * Helper method used to test data connectivity by pinging a series of popular sites.
+     * @return true if device has data connectivity, false otherwise.
+     */
+    public boolean hasData() {
+        String[] hostList = {"www.google.com", "www.yahoo.com",
+                "www.bing.com", "www.facebook.com", "www.ask.com"};
+        try {
+            for (int i = 0; i < hostList.length; ++i) {
+                String host = hostList[i];
+                Process p = Runtime.getRuntime().exec("ping -c 10 -w 100 " + host);
+                int status = p.waitFor();
+                if (status == 0) {
+                    return true;
+                }
+            }
+        } catch (UnknownHostException e) {
+            Log.e(LOG_TAG, "Ping test Failed: Unknown Host");
+        } catch (IOException e) {
+            Log.e(LOG_TAG, "Ping test Failed: IOException");
+        } catch (InterruptedException e) {
+            Log.e(LOG_TAG, "Ping test Failed: InterruptedException");
+        }
+        return false;
     }
 }

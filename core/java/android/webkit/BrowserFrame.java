@@ -813,8 +813,6 @@ class BrowserFrame extends Handler {
                                               boolean synchronous,
                                               String username,
                                               String password) {
-        PerfChecker checker = new PerfChecker();
-
         if (mSettings.getCacheMode() != WebSettings.LOAD_DEFAULT) {
             cacheMode = mSettings.getCacheMode();
         }
@@ -872,11 +870,6 @@ class BrowserFrame extends Handler {
                 || headers.containsKey("If-None-Match") ? 
                         WebSettings.LOAD_NO_CACHE : cacheMode);
         // Set referrer to current URL?
-        if (!loader.executeLoad()) {
-            checker.responseAlert("startLoadingResource fail");
-        }
-        checker.responseAlert("startLoadingResource succeed");
-
         return !synchronous ? loadListener : null;
     }
 
@@ -948,6 +941,13 @@ class BrowserFrame extends Handler {
         if (androidResource != null) {
             return new WebResourceResponse(null, null, androidResource);
         }
+
+        // Note that we check this after looking for an android_asset or
+        // android_res URL, as we allow those even if file access is disabled.
+        if (!mSettings.getAllowFileAccess() && url.startsWith("file://")) {
+            return new WebResourceResponse(null, null, null);
+        }
+
         WebResourceResponse response = mCallbackProxy.shouldInterceptRequest(url);
         if (response == null && "browser:incognito".equals(url)) {
             try {
@@ -1187,11 +1187,19 @@ class BrowserFrame extends Handler {
             @Override
             public void proceed() {
                 SslCertLookupTable.getInstance().setIsAllowed(sslError);
-                nativeSslCertErrorProceed(handle);
+                post(new Runnable() {
+                        public void run() {
+                            nativeSslCertErrorProceed(handle);
+                        }
+                    });
             }
             @Override
             public void cancel() {
-                nativeSslCertErrorCancel(handle, certError);
+                post(new Runnable() {
+                        public void run() {
+                            nativeSslCertErrorCancel(handle, certError);
+                        }
+                    });
             }
         };
         mCallbackProxy.onReceivedSslError(handler, sslError);
@@ -1411,4 +1419,17 @@ class BrowserFrame extends Handler {
     native void nativeSslClientCert(int handle,
                                     byte[] pkcs8EncodedPrivateKey,
                                     byte[][] asn1DerEncodedCertificateChain);
+
+    /**
+     * Returns true when the contents of the frame is an RTL or vertical-rl
+     * page. This is used for determining whether a frame should be initially
+     * scrolled right-most as opposed to left-most.
+     * @return true when the frame should be initially scrolled right-most
+     * based on the text direction and writing mode.
+     */
+    /* package */ boolean getShouldStartScrolledRight() {
+        return nativeGetShouldStartScrolledRight(mNativeFrame);
+    }
+
+    private native boolean nativeGetShouldStartScrolledRight(int nativeBrowserFrame);
 }

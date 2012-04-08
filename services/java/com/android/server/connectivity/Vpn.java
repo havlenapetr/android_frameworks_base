@@ -322,7 +322,7 @@ public class Vpn extends INetworkManagementEventObserver.Stub {
                     .setContentTitle(title)
                     .setContentText(text)
                     .setContentIntent(VpnConfig.getIntentForStatusPanel(mContext, config))
-                    .setDefaults(Notification.DEFAULT_ALL)
+                    .setDefaults(0)
                     .setOngoing(true)
                     .getNotification();
             nm.notify(R.drawable.vpn_connected, notification);
@@ -482,6 +482,7 @@ public class Vpn extends INetworkManagementEventObserver.Stub {
                 if (state.exists()) {
                     throw new IllegalStateException("Cannot delete the state");
                 }
+                new File("/data/misc/vpn/abort").delete();
 
                 // Check if we need to restart any of the daemons.
                 boolean restart = false;

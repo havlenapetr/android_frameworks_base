@@ -167,7 +167,9 @@ public abstract class DataConnectionTracker extends Handler {
     // independent of mInternalDataEnabled and requests for APN access
     // persisted
     protected boolean mUserDataEnabled = true;
-    protected boolean mPolicyDataEnabled = true;
+
+    // TODO: move away from static state once 5587429 is fixed.
+    protected static boolean sPolicyDataEnabled = true;
 
     private boolean[] dataEnabled = new boolean[APN_NUM_TYPES];
 
@@ -210,8 +212,10 @@ public abstract class DataConnectionTracker extends Handler {
     // represents an invalid IP address
     protected static final String NULL_IP = "0.0.0.0";
 
-    // Default for the data stall alarm
-    protected static final int DATA_STALL_ALARM_DELAY_IN_MS_DEFAULT = 1000 * 60 * 6;
+    // Default for the data stall alarm while non-aggressive stall detection
+    protected static final int DATA_STALL_ALARM_NON_AGGRESSIVE_DELAY_IN_MS_DEFAULT = 1000 * 60 * 6;
+    // Default for the data stall alarm for aggressive stall detection
+    protected static final int DATA_STALL_ALARM_AGGRESSIVE_DELAY_IN_MS_DEFAULT = 1000 * 60;
     // If attempt is less than this value we're doing first level recovery
     protected static final int DATA_STALL_NO_RECV_POLL_LIMIT = 1;
     // Tag for tracking stale alarms
@@ -321,10 +325,12 @@ public abstract class DataConnectionTracker extends Handler {
                 mIsScreenOn = true;
                 stopNetStatPoll();
                 startNetStatPoll();
+                restartDataStallAlarm();
             } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
                 mIsScreenOn = false;
                 stopNetStatPoll();
                 startNetStatPoll();
+                restartDataStallAlarm();
             } else if (action.startsWith(getActionIntentReconnectAlarm())) {
                 log("Reconnect alarm. Previous state was " + mState);
                 onActionIntentReconnectAlarm(intent);
@@ -620,6 +626,7 @@ public abstract class DataConnectionTracker extends Handler {
     protected abstract String getActionIntentDataStallAlarm();
     protected abstract void startNetStatPoll();
     protected abstract void stopNetStatPoll();
+    protected abstract void restartDataStallAlarm();
     protected abstract void restartRadio();
     protected abstract void log(String s);
     protected abstract void loge(String s);
@@ -766,7 +773,7 @@ public abstract class DataConnectionTracker extends Handler {
     public boolean getAnyDataEnabled() {
         final boolean result;
         synchronized (mDataEnabledLock) {
-            result = (mInternalDataEnabled && mUserDataEnabled && mPolicyDataEnabled
+            result = (mInternalDataEnabled && mUserDataEnabled && sPolicyDataEnabled
                     && (enabledCount != 0));
         }
         if (!result && DBG) log("getAnyDataEnabled " + result);
@@ -1022,8 +1029,11 @@ public abstract class DataConnectionTracker extends Handler {
                     didDisable = true;
                 }
             }
-            if (didDisable && enabledCount == 0) {
-                onCleanUpConnection(true, apnId, Phone.REASON_DATA_DISABLED);
+            if (didDisable) {
+                if ((enabledCount == 0) || (apnId == APN_DUN_ID)) {
+                    mRequestedApnType = Phone.APN_TYPE_DEFAULT;
+                    onCleanUpConnection(true, apnId, Phone.REASON_DATA_DISABLED);
+                }
 
                 // send the disconnect msg manually, since the normal route wont send
                 // it (it's not enabled)
@@ -1132,8 +1142,8 @@ public abstract class DataConnectionTracker extends Handler {
     protected void onSetPolicyDataEnabled(boolean enabled) {
         synchronized (mDataEnabledLock) {
             final boolean prevEnabled = getAnyDataEnabled();
-            if (mPolicyDataEnabled != enabled) {
-                mPolicyDataEnabled = enabled;
+            if (sPolicyDataEnabled != enabled) {
+                sPolicyDataEnabled = enabled;
                 if (prevEnabled != getAnyDataEnabled()) {
                     if (!prevEnabled) {
                         resetAllRetryCounts();

@@ -26,8 +26,10 @@ import static android.net.NetworkPolicyManager.RULE_REJECT_METERED;
 import android.bluetooth.BluetoothTetheringDataTracker;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.net.ConnectivityManager;
 import android.net.DummyDataStateTracker;
@@ -51,6 +53,7 @@ import android.net.Proxy;
 import android.net.ProxyProperties;
 import android.net.RouteInfo;
 import android.net.wifi.WifiStateTracker;
+import android.net.wimax.WimaxManagerConstants;
 import android.os.Binder;
 import android.os.FileUtils;
 import android.os.Handler;
@@ -78,10 +81,14 @@ import com.android.server.connectivity.Tethering;
 import com.android.server.connectivity.Vpn;
 import com.google.android.collect.Lists;
 import com.google.android.collect.Sets;
-
+import dalvik.system.DexClassLoader;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.InvocationTargetException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
@@ -491,6 +498,12 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                 mNetTrackers[netType] = BluetoothTetheringDataTracker.getInstance();
                 mNetTrackers[netType].startMonitoring(context, mHandler);
                 break;
+            case ConnectivityManager.TYPE_WIMAX:
+                mNetTrackers[netType] = makeWimaxStateTracker();
+                if (mNetTrackers[netType]!= null) {
+                    mNetTrackers[netType].startMonitoring(context, mHandler);
+                }
+                break;
             case ConnectivityManager.TYPE_ETHERNET:
                 mNetTrackers[netType] = EthernetDataTracker.getInstance();
                 mNetTrackers[netType].startMonitoring(context, mHandler);
@@ -501,7 +514,9 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                 continue;
             }
             mCurrentLinkProperties[netType] = null;
-            if (mNetConfigs[netType].isDefault()) mNetTrackers[netType].reconnect();
+            if (mNetTrackers[netType] != null && mNetConfigs[netType].isDefault()) {
+                mNetTrackers[netType].reconnect();
+            }
         }
 
         IBinder b = ServiceManager.getService(Context.NETWORKMANAGEMENT_SERVICE);
@@ -531,7 +546,81 @@ public class ConnectivityService extends IConnectivityManager.Stub {
 
         loadGlobalProxy();
     }
+private NetworkStateTracker makeWimaxStateTracker() {
+        //Initialize Wimax
+        DexClassLoader wimaxClassLoader;
+        Class wimaxStateTrackerClass = null;
+        Class wimaxServiceClass = null;
+        Class wimaxManagerClass;
+        String wimaxJarLocation;
+        String wimaxLibLocation;
+        String wimaxManagerClassName;
+        String wimaxServiceClassName;
+        String wimaxStateTrackerClassName;
 
+        NetworkStateTracker wimaxStateTracker = null;
+
+        boolean isWimaxEnabled = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_wimaxEnabled);
+
+        if (isWimaxEnabled) {
+            try {
+                wimaxJarLocation = mContext.getResources().getString(
+                        com.android.internal.R.string.config_wimaxServiceJarLocation);
+                wimaxLibLocation = mContext.getResources().getString(
+                        com.android.internal.R.string.config_wimaxNativeLibLocation);
+                wimaxManagerClassName = mContext.getResources().getString(
+                        com.android.internal.R.string.config_wimaxManagerClassname);
+                wimaxServiceClassName = mContext.getResources().getString(
+                        com.android.internal.R.string.config_wimaxServiceClassname);
+                wimaxStateTrackerClassName = mContext.getResources().getString(
+                        com.android.internal.R.string.config_wimaxStateTrackerClassname);
+
+                log("wimaxJarLocation: " + wimaxJarLocation);
+                wimaxClassLoader =  new DexClassLoader(wimaxJarLocation,
+                        new ContextWrapper(mContext).getCacheDir().getAbsolutePath(),
+                        wimaxLibLocation, ClassLoader.getSystemClassLoader());
+
+                try {
+                    wimaxManagerClass = wimaxClassLoader.loadClass(wimaxManagerClassName);
+                    wimaxStateTrackerClass = wimaxClassLoader.loadClass(wimaxStateTrackerClassName);
+                    wimaxServiceClass = wimaxClassLoader.loadClass(wimaxServiceClassName);
+                } catch (ClassNotFoundException ex) {
+                    loge("Exception finding Wimax classes: " + ex.toString());
+                    return null;
+                }
+            } catch(Resources.NotFoundException ex) {
+                loge("Wimax Resources does not exist!!! ");
+                return null;
+            }
+
+            try {
+                log("Starting Wimax Service... ");
+
+                Constructor wmxStTrkrConst = wimaxStateTrackerClass.getConstructor
+                        (new Class[] {Context.class, Handler.class});
+                wimaxStateTracker = (NetworkStateTracker)wmxStTrkrConst.newInstance(mContext,
+                        mHandler);
+
+                Constructor wmxSrvConst = wimaxServiceClass.getDeclaredConstructor
+                        (new Class[] {Context.class, wimaxStateTrackerClass});
+                wmxSrvConst.setAccessible(true);
+                IBinder svcInvoker = (IBinder)wmxSrvConst.newInstance(mContext, wimaxStateTracker);
+                wmxSrvConst.setAccessible(false);
+
+                ServiceManager.addService(WimaxManagerConstants.WIMAX_SERVICE, svcInvoker);
+
+            } catch(Exception ex) {
+                loge("Exception creating Wimax classes: " + ex.toString());
+                return null;
+            }
+        } else {
+            loge("Wimax is not enabled or not added to the network attributes!!! ");
+            return null;
+        }
+
+        return wimaxStateTracker;
+    }
     /**
      * Sets the preferred network.
      * @param preference the new preference
@@ -942,9 +1031,14 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                 if ((ni.isConnectedOrConnecting() == true) &&
                         !network.isTeardownRequested()) {
                     if (ni.isConnected() == true) {
-                        // add the pid-specific dns
-                        handleDnsConfigurationChange(usedNetworkType);
-                        if (VDBG) log("special network already active");
+                        final long token = Binder.clearCallingIdentity();
+                        try {
+                            // add the pid-specific dns
+                            handleDnsConfigurationChange(usedNetworkType);
+                            if (VDBG) log("special network already active");
+                        } finally {
+                            Binder.restoreCallingIdentity(token);
+                        }
                         return Phone.APN_ALREADY_ACTIVE;
                     }
                     if (VDBG) log("special network already connecting");
@@ -1132,6 +1226,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
         }
 
         if (!ConnectivityManager.isNetworkTypeValid(networkType)) {
+            if (DBG) log("requestRouteToHostAddress on invalid network: " + networkType);
             return false;
         }
         NetworkStateTracker tracker = mNetTrackers[networkType];
@@ -1144,11 +1239,16 @@ public class ConnectivityService extends IConnectivityManager.Stub {
             }
             return false;
         }
+        final long token = Binder.clearCallingIdentity();
         try {
             InetAddress addr = InetAddress.getByAddress(hostAddress);
             LinkProperties lp = tracker.getLinkProperties();
             return addRouteToAddress(lp, addr);
-        } catch (UnknownHostException e) {}
+        } catch (UnknownHostException e) {
+            if (DBG) log("requestRouteToHostAddress got " + e.toString());
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
         return false;
     }
 
@@ -1188,7 +1288,10 @@ public class ConnectivityService extends IConnectivityManager.Stub {
 
     private boolean modifyRoute(String ifaceName, LinkProperties lp, RouteInfo r, int cycleCount,
             boolean doAdd, boolean toDefaultTable) {
-        if ((ifaceName == null) || (lp == null) || (r == null)) return false;
+        if ((ifaceName == null) || (lp == null) || (r == null)) {
+            if (DBG) log("modifyRoute got unexpected null: " + ifaceName + ", " + lp + ", " + r);
+            return false;
+        }
 
         if (cycleCount > MAX_HOSTROUTE_CYCLE_COUNT) {
             loge("Error modifying route - too much recursion");
@@ -1220,7 +1323,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                 }
             } catch (Exception e) {
                 // never crash - catch them all
-                if (VDBG) loge("Exception trying to add a route: " + e);
+                if (DBG) loge("Exception trying to add a route: " + e);
                 return false;
             }
         } else {
@@ -1234,7 +1337,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                         mNetd.removeRoute(ifaceName, r);
                     } catch (Exception e) {
                         // never crash - catch them all
-                        if (VDBG) loge("Exception trying to remove a route: " + e);
+                        if (DBG) loge("Exception trying to remove a route: " + e);
                         return false;
                     }
                 } else {
@@ -1246,7 +1349,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                     mNetd.removeSecondaryRoute(ifaceName, r);
                 } catch (Exception e) {
                     // never crash - catch them all
-                    if (VDBG) loge("Exception trying to remove a route: " + e);
+                    if (DBG) loge("Exception trying to remove a route: " + e);
                     return false;
                 }
             }
@@ -1341,6 +1444,12 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                 log(mNetTrackers[ConnectivityManager.TYPE_MOBILE].toString() + enabled);
             }
             mNetTrackers[ConnectivityManager.TYPE_MOBILE].setUserDataEnable(enabled);
+        }
+        if (mNetTrackers[ConnectivityManager.TYPE_WIMAX] != null) {
+            if (VDBG) {
+                log(mNetTrackers[ConnectivityManager.TYPE_WIMAX].toString() + enabled);
+            }
+            mNetTrackers[ConnectivityManager.TYPE_WIMAX].setUserDataEnable(enabled);
         }
     }
 
@@ -1508,6 +1617,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                 if (checkType == prevNetType) continue;
                 if (mNetConfigs[checkType] == null) continue;
                 if (!mNetConfigs[checkType].isDefault()) continue;
+                if (mNetTrackers[checkType] == null) continue;
 
 // Enabling the isAvailable() optimization caused mobile to not get
 // selected if it was in the middle of error handling. Specifically
@@ -1908,7 +2018,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                         mNetd.removeRoute(ifaceName, r);
                     } catch (Exception e) {
                         // never crash - catch them all
-                        if (VDBG) loge("Exception trying to remove a route: " + e);
+                        if (DBG) loge("Exception trying to remove a route: " + e);
                     }
                 }
             }
@@ -2122,7 +2232,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                 mNetd.setDnsServersForInterface(iface, NetworkUtils.makeStrings(dnses));
                 mNetd.setDefaultInterfaceForDns(iface);
             } catch (Exception e) {
-                if (VDBG) loge("exception setting default dns interface: " + e);
+                if (DBG) loge("exception setting default dns interface: " + e);
             }
         }
         if (!domains.equals(SystemProperties.get("net.dns.search"))) {
@@ -2152,7 +2262,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                     mNetd.setDnsServersForInterface(p.getInterfaceName(),
                             NetworkUtils.makeStrings(dnses));
                 } catch (Exception e) {
-                    if (VDBG) loge("exception setting dns servers: " + e);
+                    if (DBG) loge("exception setting dns servers: " + e);
                 }
                 // set per-pid dns for attached secondary nets
                 List pids = mNetRequestersPids[netType];
