@@ -226,6 +226,18 @@ public class StorageNotification extends StorageEventListener {
             updateUsbMassStorageNotification(mUmsAvailable);
         } else if (newState.equals(Environment.MEDIA_REMOVED)) {
             /*
+             * check if removed media wasn't dynamically mounted disk
+             * (flashdisk or harddisk)
+             */
+            boolean dynamicMediaRemoved = true;
+            for(String volPath : mStorageManager.getVolumePaths()) {
+                if(volPath.equals(path)) {
+                    dynamicMediaRemoved = false;
+                    break;
+                }
+            }
+
+            /*
              * Storage has been removed. Show nomedia media notification,
              * and disable UMS notification regardless of connection state.
              */
@@ -233,7 +245,7 @@ public class StorageNotification extends StorageEventListener {
                     com.android.internal.R.string.ext_media_nomedia_notification_title,
                     com.android.internal.R.string.ext_media_nomedia_notification_message,
                     com.android.internal.R.drawable.stat_notify_sdcard_usb,
-                    true, false, null);
+                    true, dynamicMediaRemoved, null);
             updateUsbMassStorageNotification(false);
         } else if (newState.equals(Environment.MEDIA_BAD_REMOVAL)) {
             /*
