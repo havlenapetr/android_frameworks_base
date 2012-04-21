@@ -1034,20 +1034,8 @@ class MountService extends IMountService.Stub
 
     private void sendStorageIntent(String action, String path) {
         Intent intent = new Intent(action, Uri.parse("file://" + path));
-        // if volume isn't in storage list, it should be added manually,
-        // it is probably some removable USB DISK
-        StorageVolume volume = mVolumeMap.get(path);
-        if(action.equals(Intent.ACTION_MEDIA_MOUNTED) && volume == null) {
-            volume = new StorageVolume(path, "USB DISK", true, false, 0, false, 0);
-            mVolumes.add(volume);
-            mVolumeMap.put(path, volume);
-        } else if((action.equals(Intent.ACTION_MEDIA_UNMOUNTED)) &&
-                    (volume != null && volume.getDescription().equals("USB DISK"))) {
-            mVolumes.remove(mVolumes.indexOf(volume));
-            mVolumeMap.remove(path);
-        }
         // add StorageVolume extra
-        intent.putExtra(StorageVolume.EXTRA_STORAGE_VOLUME, volume);
+        intent.putExtra(StorageVolume.EXTRA_STORAGE_VOLUME, mVolumeMap.get(path));
         Slog.d(TAG, "sendStorageIntent " + intent);
         mContext.sendBroadcast(intent);
     }
