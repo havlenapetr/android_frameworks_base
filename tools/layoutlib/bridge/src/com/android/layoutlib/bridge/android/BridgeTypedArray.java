@@ -16,6 +16,7 @@
 
 package com.android.layoutlib.bridge.android;
 
+import com.android.ide.common.rendering.api.DeclareStyleableResourceValue;
 import com.android.ide.common.rendering.api.LayoutLog;
 import com.android.ide.common.rendering.api.RenderResources;
 import com.android.ide.common.rendering.api.ResourceValue;
@@ -23,10 +24,10 @@ import com.android.ide.common.rendering.api.StyleResourceValue;
 import com.android.internal.util.XmlUtils;
 import com.android.layoutlib.bridge.Bridge;
 import com.android.layoutlib.bridge.BridgeConstants;
+import com.android.layoutlib.bridge.impl.ParserFactory;
 import com.android.layoutlib.bridge.impl.ResourceHelper;
 import com.android.resources.ResourceType;
 
-import org.kxml2.io.KXmlParser;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -36,10 +37,10 @@ import android.content.res.TypedArray;
 import android.graphics.drawable.Drawable;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
+import android.view.LayoutInflater_Delegate;
 import android.view.ViewGroup.LayoutParams;
 
 import java.io.File;
-import java.io.FileReader;
 import java.util.Arrays;
 import java.util.Map;
 
@@ -48,18 +49,23 @@ import java.util.Map;
  */
 public final class BridgeTypedArray extends TypedArray {
 
-    private BridgeResources mBridgeResources;
-    private BridgeContext mContext;
+    private final BridgeResources mBridgeResources;
+    private final BridgeContext mContext;
+    private final boolean mPlatformFile;
+    private final boolean mPlatformStyleable;
+    private final String mStyleableName;
+
     private ResourceValue[] mResourceData;
     private String[] mNames;
-    private final boolean mPlatformFile;
 
     public BridgeTypedArray(BridgeResources resources, BridgeContext context, int len,
-            boolean platformFile) {
+            boolean platformFile, boolean platformStyleable, String styleableName) {
         super(null, null, null, 0);
         mBridgeResources = resources;
         mContext = context;
         mPlatformFile = platformFile;
+        mPlatformStyleable = platformStyleable;
+        mStyleableName = styleableName;
         mResourceData = new ResourceValue[len];
         mNames = new String[len];
     }
@@ -201,7 +207,18 @@ public final class BridgeTypedArray extends TypedArray {
         // Field is not null and is not an integer.
         // Check for possible constants and try to find them.
         // Get the map of attribute-constant -> IntegerValue
-        Map<String, Integer> map = Bridge.getEnumValues(mNames[index]);
+        Map<String, Integer> map = null;
+        if (mPlatformStyleable) {
+            map = Bridge.getEnumValues(mNames[index]);
+        } else if (mStyleableName != null) {
+            // get the styleable matching the resolved name
+            RenderResources res = mContext.getRenderResources();
+            ResourceValue styleable = res.getProjectResource(ResourceType.DECLARE_STYLEABLE,
+                    mStyleableName);
+            if (styleable instanceof DeclareStyleableResourceValue) {
+                map = ((DeclareStyleableResourceValue) styleable).getAttributeValues(mNames[index]);
+            }
+        }
 
         if (map != null) {
             // accumulator to store the value of the 1+ constants.
@@ -313,9 +330,7 @@ public final class BridgeTypedArray extends TypedArray {
         File f = new File(value);
         if (f.isFile()) {
             try {
-                KXmlParser parser = new KXmlParser();
-                parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true);
-                parser.setInput(new FileReader(f));
+                XmlPullParser parser = ParserFactory.create(f);
 
                 BridgeXmlBlockParser blockParser = new BridgeXmlBlockParser(
                         parser, mContext, resValue.isFramework());
@@ -359,26 +374,7 @@ public final class BridgeTypedArray extends TypedArray {
      */
     @Override
     public int getInteger(int index, int defValue) {
-        if (mResourceData[index] == null) {
-            return defValue;
-        }
-
-        String s = mResourceData[index].getValue();
-
-        if (s != null) {
-            try {
-                return Integer.parseInt(s);
-            } catch (NumberFormatException e) {
-                Bridge.getLog().warning(LayoutLog.TAG_RESOURCES_FORMAT,
-                        String.format(
-                            "\"%s\" in attribute \"%2$s\" cannont be converted to an integer.",
-                            s, mNames[index]), null /*data*/);
-
-                // The default value is returned below.
-            }
-        }
-
-        return defValue;
+        return getInt(index, defValue);
     }
 
     /**
@@ -416,7 +412,7 @@ public final class BridgeTypedArray extends TypedArray {
             return defValue;
         }
 
-        if (ResourceHelper.stringToFloat(s, mValue)) {
+        if (ResourceHelper.parseFloatAttribute(mNames[index], s, mValue, true /*requireUnit*/)) {
             return mValue.getDimension(mBridgeResources.mMetrics);
         }
 
@@ -471,40 +467,23 @@ public final class BridgeTypedArray extends TypedArray {
      */
     @Override
     public int getDimensionPixelSize(int index, int defValue) {
-        if (mResourceData[index] == null) {
+        try {
+            return getDimension(index);
+        } catch (RuntimeException e) {
+            if (mResourceData[index] != null) {
+                String s = mResourceData[index].getValue();
+
+                if (s != null) {
+                    // looks like we were unable to resolve the dimension value
+                    Bridge.getLog().warning(LayoutLog.TAG_RESOURCES_FORMAT,
+                            String.format(
+                                "\"%1$s\" in attribute \"%2$s\" is not a valid format.",
+                                s, mNames[index]), null /*data*/);
+                }
+            }
+
             return defValue;
         }
-
-        String s = mResourceData[index].getValue();
-
-        if (s == null) {
-            return defValue;
-        } else if (s.equals(BridgeConstants.MATCH_PARENT) ||
-                s.equals(BridgeConstants.FILL_PARENT)) {
-            return LayoutParams.MATCH_PARENT;
-        } else if (s.equals(BridgeConstants.WRAP_CONTENT)) {
-            return LayoutParams.WRAP_CONTENT;
-        } else if (RenderResources.REFERENCE_NULL.equals(s)) {
-            return defValue;
-        }
-
-        if (ResourceHelper.stringToFloat(s, mValue)) {
-            float f = mValue.getDimension(mBridgeResources.mMetrics);
-
-            final int res = (int)(f+0.5f);
-            if (res != 0) return res;
-            if (f == 0) return 0;
-            if (f > 0) return 1;
-            return defValue; // this is basically unreachable.
-        }
-
-        // looks like we were unable to resolve the dimension value
-        Bridge.getLog().warning(LayoutLog.TAG_RESOURCES_FORMAT,
-                String.format(
-                    "\"%1$s\" in attribute \"%2$s\" is not a valid format.",
-                    s, mNames[index]), null /*data*/);
-
-        return defValue;
     }
 
     /**
@@ -521,12 +500,55 @@ public final class BridgeTypedArray extends TypedArray {
      */
     @Override
     public int getLayoutDimension(int index, String name) {
-        return getDimensionPixelSize(index, 0);
+        try {
+            // this will throw an exception
+            return getDimension(index);
+        } catch (RuntimeException e) {
+
+            if (LayoutInflater_Delegate.sIsInInclude) {
+                throw new RuntimeException();
+            }
+
+            Bridge.getLog().warning(LayoutLog.TAG_RESOURCES_FORMAT,
+                    "You must supply a " + name + " attribute.", null);
+
+            return 0;
+        }
     }
 
     @Override
     public int getLayoutDimension(int index, int defValue) {
         return getDimensionPixelSize(index, defValue);
+    }
+
+    private int getDimension(int index) {
+        if (mResourceData[index] == null) {
+            throw new RuntimeException();
+        }
+
+        String s = mResourceData[index].getValue();
+
+        if (s == null) {
+            throw new RuntimeException();
+        } else if (s.equals(BridgeConstants.MATCH_PARENT) ||
+                s.equals(BridgeConstants.FILL_PARENT)) {
+            return LayoutParams.MATCH_PARENT;
+        } else if (s.equals(BridgeConstants.WRAP_CONTENT)) {
+            return LayoutParams.WRAP_CONTENT;
+        } else if (RenderResources.REFERENCE_NULL.equals(s)) {
+            throw new RuntimeException();
+        }
+
+        if (ResourceHelper.parseFloatAttribute(mNames[index], s, mValue, true /*requireUnit*/)) {
+            float f = mValue.getDimension(mBridgeResources.mMetrics);
+
+            final int res = (int)(f+0.5f);
+            if (res != 0) return res;
+            if (f == 0) return 0;
+            if (f > 0) return 1;
+        }
+
+        throw new RuntimeException();
     }
 
     /**
@@ -555,14 +577,15 @@ public final class BridgeTypedArray extends TypedArray {
             return defValue;
         }
 
-        if (ResourceHelper.stringToFloat(value, mValue)) {
+        if (ResourceHelper.parseFloatAttribute(mNames[index], value, mValue,
+                false /*requireUnit*/)) {
             return mValue.getFraction(base, pbase);
         }
 
         // looks like we were unable to resolve the fraction value
         Bridge.getLog().warning(LayoutLog.TAG_RESOURCES_FORMAT,
                 String.format(
-                    "\"%1$s\" in attribute \"%2$s\" cannont be converted to a fraction.",
+                    "\"%1$s\" in attribute \"%2$s\" cannot be converted to a fraction.",
                     value, mNames[index]), null /*data*/);
 
         return defValue;
@@ -759,7 +782,8 @@ public final class BridgeTypedArray extends TypedArray {
 
         String s = mResourceData[index].getValue();
 
-        return ResourceHelper.stringToFloat(s, outValue);
+        return ResourceHelper.parseFloatAttribute(mNames[index], s, outValue,
+                false /*requireUnit*/);
     }
 
     /**
