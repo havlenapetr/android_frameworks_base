@@ -248,6 +248,23 @@ public class WifiConfiguration implements Parcelable {
         public static final String[] strings = { "current", "disabled", "enabled" };
     }
 
+    /**
+     * Possible modes of a network configuration.
+     * @hide
+     */
+    public static class Mode {
+        private Mode() { }
+
+        /** this is an infrastructure network */
+        public static final int INFRASTRUCTURE = 0;
+        /** this is an ad-hoc network */
+        public static final int ADHOC = 1;
+
+        public static final String varName = "mode";
+
+        public static final String[] strings = { "infrastructure", "ad-hoc" };
+    }
+
     /** @hide */
     public static final int DISABLED_UNKNOWN_REASON                         = 0;
     /** @hide */
@@ -328,6 +345,12 @@ public class WifiConfiguration implements Parcelable {
     public boolean hiddenSSID;
 
     /**
+     * The mode this access point operates on (infrastructure or ad-hoc)
+     * @hide
+     */
+    public int mode;
+
+    /**
      * The set of key management protocols supported by this configuration.
      * See {@link KeyMgmt} for descriptions of the values.
      * Defaults to WPA-PSK WPA-EAP.
@@ -405,6 +428,7 @@ public class WifiConfiguration implements Parcelable {
         BSSID = null;
         priority = 0;
         hiddenSSID = false;
+        mode = Mode.INFRASTRUCTURE;
         disableReason = DISABLED_UNKNOWN_REASON;
         allowedKeyManagement = new BitSet();
         allowedProtocols = new BitSet();
@@ -579,6 +603,7 @@ public class WifiConfiguration implements Parcelable {
             wepTxKeyIndex = source.wepTxKeyIndex;
             priority = source.priority;
             hiddenSSID = source.hiddenSSID;
+            mode = source.mode;
             allowedKeyManagement   = (BitSet) source.allowedKeyManagement.clone();
             allowedProtocols       = (BitSet) source.allowedProtocols.clone();
             allowedAuthAlgorithms  = (BitSet) source.allowedAuthAlgorithms.clone();
@@ -607,6 +632,7 @@ public class WifiConfiguration implements Parcelable {
         dest.writeInt(wepTxKeyIndex);
         dest.writeInt(priority);
         dest.writeInt(hiddenSSID ? 1 : 0);
+        dest.writeInt(mode);
 
         writeBitSet(dest, allowedKeyManagement);
         writeBitSet(dest, allowedProtocols);
@@ -638,6 +664,7 @@ public class WifiConfiguration implements Parcelable {
                 config.wepTxKeyIndex = in.readInt();
                 config.priority = in.readInt();
                 config.hiddenSSID = in.readInt() != 0;
+                config.mode = in.readInt();
                 config.allowedKeyManagement   = readBitSet(in);
                 config.allowedProtocols       = readBitSet(in);
                 config.allowedAuthAlgorithms  = readBitSet(in);
