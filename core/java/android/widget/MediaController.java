@@ -75,11 +75,9 @@ public class MediaController extends FrameLayout {
     private View                mAnchor;
     private View                mRoot;
     private WindowManager       mWindowManager;
-    private AudioManager        mAudioManager;
     private Window              mWindow;
     private View                mDecor;
     private WindowManager.LayoutParams mDecorLayoutParams;
-    private ProgressBar         mVolume;
     private ProgressBar         mProgress;
     private TextView            mEndTime, mCurrentTime;
     private boolean             mShowing;
@@ -152,7 +150,7 @@ public class MediaController extends FrameLayout {
         mDecorLayoutParams = new WindowManager.LayoutParams();
         WindowManager.LayoutParams p = mDecorLayoutParams;
         p.gravity = Gravity.TOP;
-        p.height = LayoutParams.FILL_PARENT;
+        p.height = LayoutParams.WRAP_CONTENT;
         p.x = 0;
         p.format = PixelFormat.TRANSLUCENT;
         p.type = WindowManager.LayoutParams.TYPE_APPLICATION_PANEL;
@@ -171,7 +169,7 @@ public class MediaController extends FrameLayout {
 
         WindowManager.LayoutParams p = mDecorLayoutParams;
         p.width = mAnchor.getWidth();
-        p.y = anchorPos[1];
+        p.y = anchorPos[1] + mAnchor.getHeight();
     }
 
     // This is called whenever mAnchor's layout bound changes
@@ -227,19 +225,6 @@ public class MediaController extends FrameLayout {
         addView(v, frameParams);
     }
 
-    private void initVolumeControllerView(View v) {
-        mVolume = (ProgressBar) v.findViewById(com.android.internal.R.id.mediacontroller_volume);
-        if (mVolume != null) {
-            mAudioManager = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
-            mVolume.setMax(mAudioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-            mVolume.setProgress(mAudioManager.getStreamVolume(AudioManager.STREAM_MUSIC));
-            if (mVolume instanceof SeekBar) {
-                SeekBar seeker = (SeekBar) mVolume;
-                seeker.setOnSeekBarChangeListener(mVolumeListener);
-            }
-        }
-    }
-
     /**
      * Create the view that holds the widgets that control playback.
      * Derived classes can override this to create their own.
@@ -248,10 +233,9 @@ public class MediaController extends FrameLayout {
      */
     protected View makeControllerView() {
         LayoutInflater inflate = (LayoutInflater) mContext.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
-        mRoot = inflate.inflate(com.android.internal.R.layout.media_controller_ext, null);
+        mRoot = inflate.inflate(com.android.internal.R.layout.media_controller, null);
 
         initControllerView(mRoot);
-        initVolumeControllerView(mRoot);
 
         return mRoot;
     }
@@ -533,21 +517,6 @@ public class MediaController extends FrameLayout {
         }
         updatePausePlay();
     }
-
-    private OnSeekBarChangeListener mVolumeListener = new OnSeekBarChangeListener() {
-        public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-            int index = seekBar.getProgress();
-            mAudioManager.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0);
-        }
-
-        public void onStartTrackingTouch(SeekBar seekBar) {
-            show(3600000);
-        }
-
-        public void onStopTrackingTouch(SeekBar seekBar) {
-            show(sDefaultTimeout);
-        }
-    };
 
     // There are two scenarios that can trigger the seekbar listener to trigger:
     //

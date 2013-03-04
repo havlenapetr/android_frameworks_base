@@ -105,7 +105,6 @@
   <java-symbol type="id" name="locale" />
   <java-symbol type="id" name="matches" />
   <java-symbol type="id" name="mediacontroller_progress" />
-  <java-symbol type="id" name="mediacontroller_volume" />
   <java-symbol type="id" name="minute" />
   <java-symbol type="id" name="mode_normal" />
   <java-symbol type="id" name="month" />
@@ -1086,8 +1085,6 @@
   <java-symbol type="layout" name="list_menu_item_radio" />
   <java-symbol type="layout" name="locale_picker_item" />
   <java-symbol type="layout" name="media_controller" />
-  <java-symbol type="layout" name="media_controller_ext" />
-  <java-symbol type="layout" name="media_controller_volume" />
   <java-symbol type="layout" name="preference" />
   <java-symbol type="layout" name="preference_header_item" />
   <java-symbol type="layout" name="preference_list_content" />
