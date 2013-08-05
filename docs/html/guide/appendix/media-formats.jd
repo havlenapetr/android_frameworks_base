@@ -1,4 +1,5 @@
-page.title=Android Supported Media Formats
+page.title=Supported Media Formats
+page.tags="video","audio","mpeg","mp4","m4a","mp3","3gp","3gpp","flac","wave","wav"
 @jd:body
 
 <div id="qv-wrapper">
@@ -57,7 +58,7 @@ page.title=Android Supported Media Formats
 
 <p class="table-caption" id="formats-table"><strong>Table 1.</strong> Core media format and codec support.</p>
 
-<table>
+<table style="font-size:12px">
 <tbody>
 
 <tr>
@@ -70,22 +71,22 @@ page.title=Android Supported Media Formats
 </tr>
 
 <tr>
-<td rowspan="10">Audio</td>
-<td>AAC LC/LTP</td>
+<td rowspan="11">Audio</td>
+<td>AAC LC</td>
 <td style="text-align: center;"><big>&bull;</big></td>
 <td style="text-align: center;"><big>&bull;</big></td>
-<td rowspan="3">Mono/Stereo content in any combination of standard bit
-rates up to 160 kbps and sampling rates from 8 to 48kHz</td>
-<td rowspan="3">
+<td rowspan="2">Support for mono/stereo/5.0/5.1
+content with standard sampling rates from 8 to 48 kHz.</td>
+<td rowspan="4">
   &bull; 3GPP (.3gp)<br>
-  &bull; MPEG-4 (.mp4, .m4a)<br>
+  <nobr>&bull; MPEG-4 (.mp4, .m4a)</nobr><br>
   &bull; ADTS raw AAC (.aac, decode in Android 3.1+, encode in Android 4.0+, ADIF not supported)<br>
   &bull; MPEG-TS (.ts, not seekable, Android 3.0+)</td>
 </tr>
 
 <tr>
 <td>HE-AACv1 (AAC+)</td>
-<td>&nbsp;</td>
+<td style="text-align: center;"><big>&bull;</big><br><small>(Android 4.1+)</small></td>
 <td style="text-align: center;"><big>&bull;</big></td>
 </tr>
 
@@ -93,6 +94,16 @@ rates up to 160 kbps and sampling rates from 8 to 48kHz</td>
 <td>HE-AACv2 (enhanced AAC+)</td>
 <td>&nbsp;</td>
 <td style="text-align: center;"><big>&bull;</big></td>
+<td>Support for stereo/5.0/5.1
+content with standard sampling rates from 8 to 48 kHz.</td>
+</tr>
+
+<tr>
+<td>AAC ELD (enhanced low delay AAC)</td>
+<td style="text-align: center;"><big>&bull;</big><br><small>(Android 4.1+)</small></td>
+<td style="text-align: center;"><big>&bull;</big><br><small>(Android 4.1+)</small></td>
+<td>Support for mono/stereo content
+with standard sampling rates from 16 to 48 kHz</td>
 </tr>
 
 <tr>
@@ -160,9 +171,10 @@ no dither applied for 24-bit.
 
 <tr>
 <td>PCM/WAVE</td>
-<td>&nbsp;</td>
+<td style="text-align: center;"><big>&bull;</big><br><small>(Android 4.1+)</small></td>
 <td style="text-align: center;"><big>&bull;</big></td>
-<td>8- and 16-bit linear PCM (rates up to limit of hardware)</td>
+<td>8- and 16-bit linear PCM (rates up to limit of hardware). Sampling
+rates for raw PCM recordings at 8000, 16000 and 44100 Hz.</td>
 <td>
   WAVE (.wav)</td>
 </tr>
@@ -247,7 +259,7 @@ no dither applied for 24-bit.
 
 <tr>
 <td>VP8</td>
-<td>&nbsp;</td>
+<td style="text-align: center;" nowrap><big>&bull;</big><br><small>(Android 4.3+)</small></td>
 <td style="text-align: center;" nowrap><big>&bull;</big><br><small>(Android 2.3.3+)</small></td>
 <td>Streamable only in Android 4.0 and above</td>
 <td>
@@ -260,9 +272,17 @@ no dither applied for 24-bit.
 
 <h2 id="recommendations">Video Encoding Recommendations</h2>
 
-<p>Table 2, below, lists examples of video encoding profiles and parameters that the Android media framework supports for playback. In addition to these encoding parameter recommendations, a device's available <em>video recording</em> profiles can be used as a proxy for media playback capabilities. These profiles can be inspected using the {@link android.media.CamcorderProfile CamcorderProfile} class, which is available since API level 8.</p>
+<p>Table 2, below, lists examples of video encoding profiles and parameters that the Android
+media framework supports for playback in the H.264 Baseline Profile codec. While
+table 3 lists examples that the framework supports for playback in the VP8 media codec.</p>
 
-<p class="table-caption" id="encoding-recommendations-table"><strong>Table 2.</strong> Examples of supported video encoding parameters.</p>
+<p>In addition to these encoding parameter recommendations,
+a device's available <em>video recording</em> profiles can be used as a proxy for media playback
+capabilities. These profiles can be inspected using the {@link android.media.CamcorderProfile
+CamcorderProfile} class, which is available since API level 8.</p>
+
+<p class="table-caption" id="encoding-recommendations-table"><strong>Table 2.</strong>
+Examples of supported video encoding parameters for the H.264 Baseline Profile codec.</p>
 
 <table>
   <thead>
@@ -270,16 +290,10 @@ no dither applied for 24-bit.
     <th>&nbsp;</th>
     <th><acronym title="Standard definition">SD</a> (Low quality)</th>
     <th><acronym title="Standard definition">SD</a> (High quality)</th>
-    <th><acronym title="High definition">HD</a> (Not available on all devices)</th>
+    <th><acronym title="High definition">HD 720p</a> (N/A on all devices)</th>
   </tr>
   </thead>
   <tbody>
-  <tr>
-    <th>Video codec</th>
-    <td>H.264 Baseline Profile</td>
-    <td>H.264 Baseline Profile</td>
-    <td>H.264 Baseline Profile</td>
-  </tr>
   <tr>
     <th>Video resolution</th>
     <td>176 x 144 px</td>
@@ -318,6 +332,49 @@ no dither applied for 24-bit.
   </tr>
   </tbody>
 </table>
+
+
+
+<p class="table-caption" id="encoding-recommendations-table-vp8"><strong>Table 3.</strong>
+Examples of supported video encoding parameters for the VP8 codec.</p>
+
+<table>
+  <thead>
+  <tr>
+    <th>&nbsp;</th>
+    <th><acronym title="Standard definition">SD</a> (Low quality)</th>
+    <th><acronym title="Standard definition">SD</a> (High quality)</th>
+    <th><acronym title="High definition">HD 720p</a> (N/A on all devices)</th>
+    <th><acronym title="High definition">HD 1080p</a> (N/A on all devices)</th>
+  </tr>
+  </thead>
+  <tbody>
+  <tr>
+    <th>Video resolution</th>
+    <td>320 x 180 px</td>
+    <td>640 x 360 px</td>
+    <td>1280 x 720 px</td>
+    <td>1920 x 1080 px</td>
+  </tr>
+  <tr>
+    <th>Video frame rate</th>
+    <td>30 fps</td>
+    <td>30 fps</td>
+    <td>30 fps</td>
+    <td>30 fps</td>
+  </tr>
+  <tr>
+    <th>Video bitrate</th>
+    <td>800 Kbps</td>
+    <td>2 Mbps</td>
+    <td>4 Mbps</td>
+    <td>10 Mbps</td>
+  </tr>
+  </tbody>
+</table>
+
+
+
 
 <p style="margin-top: 2em">For video content that is streamed over HTTP or RTSP, there are additional requirements:</p>
 

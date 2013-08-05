@@ -180,6 +180,9 @@ public class AsyncChannel {
     /** CMD_FULLY_CONNECTED refused because a connection already exists*/
     public static final int STATUS_FULL_CONNECTION_REFUSED_ALREADY_CONNECTED = 3;
 
+    /** Error indicating abnormal termination of destination messenger */
+    public static final int STATUS_REMOTE_DISCONNECTION = 4;
+
     /** Service connection */
     private AsyncChannelConnection mConnection;
 
@@ -194,6 +197,9 @@ public class AsyncChannel {
 
     /** Messenger for destination */
     private Messenger mDstMessenger;
+
+    /** Death Monitor for destination messenger */
+    private DeathMonitor mDeathMonitor;
 
     /**
      * AsyncChannel constructor
@@ -434,6 +440,7 @@ public class AsyncChannel {
         mSrcHandler = null;
         mSrcMessenger = null;
         mDstMessenger = null;
+        mDeathMonitor = null;
         mConnection = null;
     }
 
@@ -444,8 +451,22 @@ public class AsyncChannel {
         if ((mConnection != null) && (mSrcContext != null)) {
             mSrcContext.unbindService(mConnection);
         }
+        try {
+            // Send the DISCONNECTED, although it may not be received
+            // but its the best we can do.
+            Message msg = Message.obtain();
+            msg.what = CMD_CHANNEL_DISCONNECTED;
+            msg.replyTo = mSrcMessenger;
+            mDstMessenger.send(msg);
+        } catch(Exception e) {
+        }
+        // Tell source we're disconnected.
         if (mSrcHandler != null) {
             replyDisconnected(STATUS_SUCCESSFUL);
+        }
+        // Unlink only when bindService isn't used
+        if (mConnection == null && mDstMessenger != null && mDeathMonitor!= null) {
+            mDstMessenger.getBinder().unlinkToDeath(mDeathMonitor, 0);
         }
     }
 
@@ -822,6 +843,21 @@ public class AsyncChannel {
         msg.arg1 = status;
         msg.obj = this;
         msg.replyTo = mDstMessenger;
+
+        /*
+         * Link to death only when bindService isn't used.
+         */
+        if (mConnection == null) {
+            mDeathMonitor = new DeathMonitor();
+            try {
+                mDstMessenger.getBinder().linkToDeath(mDeathMonitor, 0);
+            } catch (RemoteException e) {
+                mDeathMonitor = null;
+                // Override status to indicate failure
+                msg.arg1 = STATUS_BINDING_UNSUCCESSFUL;
+            }
+        }
+
         mSrcHandler.sendMessage(msg);
     }
 
@@ -866,5 +902,16 @@ public class AsyncChannel {
      */
     private static void log(String s) {
         Slog.d(TAG, s);
+    }
+
+    private final class DeathMonitor implements IBinder.DeathRecipient {
+
+        DeathMonitor() {
+        }
+
+        public void binderDied() {
+            replyDisconnected(STATUS_REMOTE_DISCONNECTION);
+        }
+
     }
 }

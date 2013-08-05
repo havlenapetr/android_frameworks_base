@@ -673,24 +673,40 @@ static bool applyFileOverlay(Bundle *bundle,
     return true;
 }
 
-void addTagAttribute(const sp<XMLNode>& node, const char* ns8,
-        const char* attr8, const char* value)
+/*
+ * Inserts an attribute in a given node, only if the attribute does not
+ * exist.
+ * If errorOnFailedInsert is true, and the attribute already exists, returns false.
+ * Returns true otherwise, even if the attribute already exists.
+ */
+bool addTagAttribute(const sp<XMLNode>& node, const char* ns8,
+        const char* attr8, const char* value, bool errorOnFailedInsert)
 {
     if (value == NULL) {
-        return;
+        return true;
     }
-    
+
     const String16 ns(ns8);
     const String16 attr(attr8);
-    
+
     if (node->getAttribute(ns, attr) != NULL) {
+        if (errorOnFailedInsert) {
+            fprintf(stderr, "Error: AndroidManifest.xml already defines %s (in %s);"
+                            " cannot insert new value %s.\n",
+                    String8(attr).string(), String8(ns).string(), value);
+            return false;
+        }
+
         fprintf(stderr, "Warning: AndroidManifest.xml already defines %s (in %s);"
                         " using existing value in manifest.\n",
                 String8(attr).string(), String8(ns).string());
-        return;
+
+        // don't stop the build.
+        return true;
     }
     
     node->addAttribute(ns, attr, String16(value));
+    return true;
 }
 
 static void fullyQualifyClassName(const String8& package, sp<XMLNode> node,
@@ -728,11 +744,17 @@ status_t massageManifest(Bundle* bundle, sp<XMLNode> root)
         fprintf(stderr, "No <manifest> tag.\n");
         return UNKNOWN_ERROR;
     }
-    
-    addTagAttribute(root, RESOURCES_ANDROID_NAMESPACE, "versionCode",
-            bundle->getVersionCode());
-    addTagAttribute(root, RESOURCES_ANDROID_NAMESPACE, "versionName",
-            bundle->getVersionName());
+
+    bool errorOnFailedInsert = bundle->getErrorOnFailedInsert();
+
+    if (!addTagAttribute(root, RESOURCES_ANDROID_NAMESPACE, "versionCode",
+            bundle->getVersionCode(), errorOnFailedInsert)) {
+        return UNKNOWN_ERROR;
+    }
+    if (!addTagAttribute(root, RESOURCES_ANDROID_NAMESPACE, "versionName",
+            bundle->getVersionName(), errorOnFailedInsert)) {
+        return UNKNOWN_ERROR;
+    }
     
     if (bundle->getMinSdkVersion() != NULL
             || bundle->getTargetSdkVersion() != NULL
@@ -743,18 +765,27 @@ status_t massageManifest(Bundle* bundle, sp<XMLNode> root)
             root->insertChildAt(vers, 0);
         }
         
-        addTagAttribute(vers, RESOURCES_ANDROID_NAMESPACE, "minSdkVersion",
-                bundle->getMinSdkVersion());
-        addTagAttribute(vers, RESOURCES_ANDROID_NAMESPACE, "targetSdkVersion",
-                bundle->getTargetSdkVersion());
-        addTagAttribute(vers, RESOURCES_ANDROID_NAMESPACE, "maxSdkVersion",
-                bundle->getMaxSdkVersion());
+        if (!addTagAttribute(vers, RESOURCES_ANDROID_NAMESPACE, "minSdkVersion",
+                bundle->getMinSdkVersion(), errorOnFailedInsert)) {
+            return UNKNOWN_ERROR;
+        }
+        if (!addTagAttribute(vers, RESOURCES_ANDROID_NAMESPACE, "targetSdkVersion",
+                bundle->getTargetSdkVersion(), errorOnFailedInsert)) {
+            return UNKNOWN_ERROR;
+        }
+        if (!addTagAttribute(vers, RESOURCES_ANDROID_NAMESPACE, "maxSdkVersion",
+                bundle->getMaxSdkVersion(), errorOnFailedInsert)) {
+            return UNKNOWN_ERROR;
+        }
     }
 
     if (bundle->getDebugMode()) {
         sp<XMLNode> application = root->getChildElement(String16(), String16("application"));
         if (application != NULL) {
-            addTagAttribute(application, RESOURCES_ANDROID_NAMESPACE, "debuggable", "true");
+            if (!addTagAttribute(application, RESOURCES_ANDROID_NAMESPACE, "debuggable", "true",
+                    errorOnFailedInsert)) {
+                return UNKNOWN_ERROR;
+            }
         }
     }
 
@@ -1537,11 +1568,37 @@ static const char whitespace[] =
     return whitespace + sizeof(whitespace) - 1 - indent*4;
 }
 
-static status_t fixupSymbol(String16* inoutSymbol)
-{
-    inoutSymbol->replaceAll('.', '_');
-    inoutSymbol->replaceAll(':', '_');
-    return NO_ERROR;
+static String8 flattenSymbol(const String8& symbol) {
+    String8 result(symbol);
+    ssize_t first;
+    if ((first = symbol.find(":", 0)) >= 0
+            || (first = symbol.find(".", 0)) >= 0) {
+        size_t size = symbol.size();
+        char* buf = result.lockBuffer(size);
+        for (size_t i = first; i < size; i++) {
+            if (buf[i] == ':' || buf[i] == '.') {
+                buf[i] = '_';
+            }
+        }
+        result.unlockBuffer(size);
+    }
+    return result;
+}
+
+static String8 getSymbolPackage(const String8& symbol, const sp<AaptAssets>& assets, bool pub) {
+    ssize_t colon = symbol.find(":", 0);
+    if (colon >= 0) {
+        return String8(symbol.string(), colon);
+    }
+    return pub ? assets->getPackage() : assets->getSymbolsPrivatePackage();
+}
+
+static String8 getSymbolName(const String8& symbol) {
+    ssize_t colon = symbol.find(":", 0);
+    if (colon >= 0) {
+        return String8(symbol.string() + colon + 1);
+    }
+    return symbol;
 }
 
 static String16 getAttributeComment(const sp<AaptAssets>& assets,
@@ -1585,12 +1642,8 @@ static status_t writeLayoutClasses(
     size_t N = symbols->getNestedSymbols().size();
     for (i=0; i<N; i++) {
         sp<AaptSymbols> nsymbols = symbols->getNestedSymbols().valueAt(i);
-        String16 nclassName16(symbols->getNestedSymbols().keyAt(i));
-        String8 realClassName(nclassName16);
-        if (fixupSymbol(&nclassName16) != NO_ERROR) {
-            hasErrors = true;
-        }
-        String8 nclassName(nclassName16);
+        String8 realClassName(symbols->getNestedSymbols().keyAt(i));
+        String8 nclassName(flattenSymbol(realClassName));
 
         SortedVector<uint32_t> idents;
         Vector<uint32_t> origOrder;
@@ -1680,13 +1733,11 @@ static status_t writeLayoutClasses(
                     }
                     comment = String16(comment.string(), p-comment.string());
                 }
-                String16 name(name8);
-                fixupSymbol(&name);
                 fprintf(fp, "%s   <tr><td><code>{@link #%s_%s %s:%s}</code></td><td>%s</td></tr>\n",
                         indentStr, nclassName.string(),
-                        String8(name).string(),
-                        assets->getPackage().string(),
-                        String8(name).string(),
+                        flattenSymbol(name8).string(),
+                        getSymbolPackage(name8, assets, true).string(),
+                        getSymbolName(name8).string(),
                         String8(comment).string());
             }
         }
@@ -1700,11 +1751,9 @@ static status_t writeLayoutClasses(
                 if (!publicFlags.itemAt(a) && !includePrivate) {
                     continue;
                 }
-                String16 name(sym.name);
-                fixupSymbol(&name);
                 fprintf(fp, "%s   @see #%s_%s\n",
                         indentStr, nclassName.string(),
-                        String8(name).string());
+                        flattenSymbol(sym.name).string());
             }
         }
         fprintf(fp, "%s */\n", getIndentSpace(indent));
@@ -1747,11 +1796,7 @@ static status_t writeLayoutClasses(
                 } else {
                     getAttributeComment(assets, name8, &typeComment);
                 }
-                String16 name(name8);
-                if (fixupSymbol(&name) != NO_ERROR) {
-                    hasErrors = true;
-                }
-                
+
                 uint32_t typeSpecFlags = 0;
                 String16 name16(sym.name);
                 assets->getIncludedResources().identifierForName(
@@ -1777,9 +1822,8 @@ static status_t writeLayoutClasses(
                             "%s  <p>This symbol is the offset where the {@link %s.R.attr#%s}\n"
                             "%s  attribute's value can be found in the {@link #%s} array.\n",
                             indentStr,
-                            pub ? assets->getPackage().string()
-                                : assets->getSymbolsPrivatePackage().string(),
-                            String8(name).string(),
+                            getSymbolPackage(name8, assets, pub).string(),
+                            getSymbolName(name8).string(),
                             indentStr, nclassName.string());
                 }
                 if (typeComment.size() > 0) {
@@ -1792,18 +1836,19 @@ static status_t writeLayoutClasses(
                 if (comment.size() > 0) {
                     if (pub) {
                         fprintf(fp,
-                                "%s  <p>This corresponds to the global attribute"
+                                "%s  <p>This corresponds to the global attribute\n"
                                 "%s  resource symbol {@link %s.R.attr#%s}.\n",
                                 indentStr, indentStr,
-                                assets->getPackage().string(),
-                                String8(name).string());
+                                getSymbolPackage(name8, assets, true).string(),
+                                getSymbolName(name8).string());
                     } else {
                         fprintf(fp,
                                 "%s  <p>This is a private symbol.\n", indentStr);
                     }
                 }
                 fprintf(fp, "%s  @attr name %s:%s\n", indentStr,
-                        "android", String8(name).string());
+                        getSymbolPackage(name8, assets, pub).string(),
+                        getSymbolName(name8).string());
                 fprintf(fp, "%s*/\n", indentStr);
                 if (deprecated) {
                     fprintf(fp, "%s@Deprecated\n", indentStr);
@@ -1811,13 +1856,109 @@ static status_t writeLayoutClasses(
                 fprintf(fp,
                         "%spublic static final int %s_%s = %d;\n",
                         indentStr, nclassName.string(),
-                        String8(name).string(), (int)pos);
+                        flattenSymbol(name8).string(), (int)pos);
             }
         }
     }
 
     indent--;
     fprintf(fp, "%s};\n", getIndentSpace(indent));
+    return hasErrors ? UNKNOWN_ERROR : NO_ERROR;
+}
+
+static status_t writeTextLayoutClasses(
+    FILE* fp, const sp<AaptAssets>& assets,
+    const sp<AaptSymbols>& symbols, bool includePrivate)
+{
+    String16 attr16("attr");
+    String16 package16(assets->getPackage());
+
+    bool hasErrors = false;
+
+    size_t i;
+    size_t N = symbols->getNestedSymbols().size();
+    for (i=0; i<N; i++) {
+        sp<AaptSymbols> nsymbols = symbols->getNestedSymbols().valueAt(i);
+        String8 realClassName(symbols->getNestedSymbols().keyAt(i));
+        String8 nclassName(flattenSymbol(realClassName));
+
+        SortedVector<uint32_t> idents;
+        Vector<uint32_t> origOrder;
+        Vector<bool> publicFlags;
+
+        size_t a;
+        size_t NA = nsymbols->getSymbols().size();
+        for (a=0; a<NA; a++) {
+            const AaptSymbolEntry& sym(nsymbols->getSymbols().valueAt(a));
+            int32_t code = sym.typeCode == AaptSymbolEntry::TYPE_INT32
+                    ? sym.int32Val : 0;
+            bool isPublic = true;
+            if (code == 0) {
+                String16 name16(sym.name);
+                uint32_t typeSpecFlags;
+                code = assets->getIncludedResources().identifierForName(
+                    name16.string(), name16.size(),
+                    attr16.string(), attr16.size(),
+                    package16.string(), package16.size(), &typeSpecFlags);
+                if (code == 0) {
+                    fprintf(stderr, "ERROR: In <declare-styleable> %s, unable to find attribute %s\n",
+                            nclassName.string(), sym.name.string());
+                    hasErrors = true;
+                }
+                isPublic = (typeSpecFlags&ResTable_typeSpec::SPEC_PUBLIC) != 0;
+            }
+            idents.add(code);
+            origOrder.add(code);
+            publicFlags.add(isPublic);
+        }
+
+        NA = idents.size();
+
+        fprintf(fp, "int[] styleable %s {", nclassName.string());
+
+        for (a=0; a<NA; a++) {
+            if (a != 0) {
+                fprintf(fp, ",");
+            }
+            fprintf(fp, " 0x%08x", idents[a]);
+        }
+
+        fprintf(fp, " }\n");
+
+        for (a=0; a<NA; a++) {
+            ssize_t pos = idents.indexOf(origOrder.itemAt(a));
+            if (pos >= 0) {
+                const AaptSymbolEntry& sym = nsymbols->getSymbols().valueAt(a);
+                if (!publicFlags.itemAt(a) && !includePrivate) {
+                    continue;
+                }
+                String8 name8(sym.name);
+                String16 comment(sym.comment);
+                String16 typeComment;
+                if (comment.size() <= 0) {
+                    comment = getAttributeComment(assets, name8, &typeComment);
+                } else {
+                    getAttributeComment(assets, name8, &typeComment);
+                }
+
+                uint32_t typeSpecFlags = 0;
+                String16 name16(sym.name);
+                assets->getIncludedResources().identifierForName(
+                    name16.string(), name16.size(),
+                    attr16.string(), attr16.size(),
+                    package16.string(), package16.size(), &typeSpecFlags);
+                //printf("%s:%s/%s: 0x%08x\n", String8(package16).string(),
+                //    String8(attr16).string(), String8(name16).string(), typeSpecFlags);
+                const bool pub = (typeSpecFlags&ResTable_typeSpec::SPEC_PUBLIC) != 0;
+
+                fprintf(fp,
+                        "int styleable %s_%s %d\n",
+                        nclassName.string(),
+                        flattenSymbol(name8).string(), (int)pos);
+            }
+        }
+    }
+
     return hasErrors ? UNKNOWN_ERROR : NO_ERROR;
 }
 
@@ -1847,11 +1988,7 @@ static status_t writeSymbolClass(
         if (!assets->isJavaSymbol(sym, includePrivate)) {
             continue;
         }
-        String16 name(sym.name);
-        String8 realName(name);
-        if (fixupSymbol(&name) != NO_ERROR) {
-            return UNKNOWN_ERROR;
-        }
+        String8 name8(sym.name);
         String16 comment(sym.comment);
         bool haveComment = false;
         bool deprecated = false;
@@ -1892,7 +2029,7 @@ static status_t writeSymbolClass(
         }
         fprintf(fp, id_format,
                 getIndentSpace(indent),
-                String8(name).string(), (int)sym.int32Val);
+                flattenSymbol(name8).string(), (int)sym.int32Val);
     }
 
     for (i=0; i<N; i++) {
@@ -1903,10 +2040,7 @@ static status_t writeSymbolClass(
         if (!assets->isJavaSymbol(sym, includePrivate)) {
             continue;
         }
-        String16 name(sym.name);
-        if (fixupSymbol(&name) != NO_ERROR) {
-            return UNKNOWN_ERROR;
-        }
+        String8 name8(sym.name);
         String16 comment(sym.comment);
         bool deprecated = false;
         if (comment.size() > 0) {
@@ -1929,7 +2063,7 @@ static status_t writeSymbolClass(
         }
         fprintf(fp, "%spublic static final String %s=\"%s\";\n",
                 getIndentSpace(indent),
-                String8(name).string(), sym.stringVal.string());
+                flattenSymbol(name8).string(), sym.stringVal.string());
     }
 
     sp<AaptSymbols> styleableSymbols;
@@ -1960,6 +2094,47 @@ static status_t writeSymbolClass(
     return NO_ERROR;
 }
 
+static status_t writeTextSymbolClass(
+    FILE* fp, const sp<AaptAssets>& assets, bool includePrivate,
+    const sp<AaptSymbols>& symbols, const String8& className)
+{
+    size_t i;
+    status_t err = NO_ERROR;
+
+    size_t N = symbols->getSymbols().size();
+    for (i=0; i<N; i++) {
+        const AaptSymbolEntry& sym = symbols->getSymbols().valueAt(i);
+        if (sym.typeCode != AaptSymbolEntry::TYPE_INT32) {
+            continue;
+        }
+
+        if (!assets->isJavaSymbol(sym, includePrivate)) {
+            continue;
+        }
+
+        String8 name8(sym.name);
+        fprintf(fp, "int %s %s 0x%08x\n",
+                className.string(),
+                flattenSymbol(name8).string(), (int)sym.int32Val);
+    }
+
+    N = symbols->getNestedSymbols().size();
+    for (i=0; i<N; i++) {
+        sp<AaptSymbols> nsymbols = symbols->getNestedSymbols().valueAt(i);
+        String8 nclassName(symbols->getNestedSymbols().keyAt(i));
+        if (nclassName == "styleable") {
+            err = writeTextLayoutClasses(fp, assets, nsymbols, includePrivate);
+        } else {
+            err = writeTextSymbolClass(fp, assets, includePrivate, nsymbols, nclassName);
+        }
+        if (err != NO_ERROR) {
+            return err;
+        }
+    }
+
+    return NO_ERROR;
+}
+
 status_t writeResourceSymbols(Bundle* bundle, const sp<AaptAssets>& assets,
     const String8& package, bool includePrivate)
 {
@@ -1967,11 +2142,15 @@ status_t writeResourceSymbols(Bundle* bundle, const sp<AaptAssets>& assets,
         return NO_ERROR;
     }
 
+    const char* textSymbolsDest = bundle->getOutputTextSymbols();
+
+    String8 R("R");
     const size_t N = assets->getSymbols().size();
     for (size_t i=0; i<N; i++) {
         sp<AaptSymbols> symbols = assets->getSymbols().valueAt(i);
         String8 className(assets->getSymbols().keyAt(i));
         String8 dest(bundle->getRClassDir());
+
         if (bundle->getMakePackageDirs()) {
             String8 pkg(package);
             const char* last = pkg.string();
@@ -2003,14 +2182,14 @@ status_t writeResourceSymbols(Bundle* bundle, const sp<AaptAssets>& assets,
         }
 
         fprintf(fp,
-        "/* AUTO-GENERATED FILE.  DO NOT MODIFY.\n"
-        " *\n"
-        " * This class was automatically generated by the\n"
-        " * aapt tool from the resource data it found.  It\n"
-        " * should not be modified by hand.\n"
-        " */\n"
-        "\n"
-        "package %s;\n\n", package.string());
+            "/* AUTO-GENERATED FILE.  DO NOT MODIFY.\n"
+            " *\n"
+            " * This class was automatically generated by the\n"
+            " * aapt tool from the resource data it found.  It\n"
+            " * should not be modified by hand.\n"
+            " */\n"
+            "\n"
+            "package %s;\n\n", package.string());
 
         status_t err = writeSymbolClass(fp, assets, includePrivate, symbols,
                 className, 0, bundle->getNonConstantId());
@@ -2019,14 +2198,37 @@ status_t writeResourceSymbols(Bundle* bundle, const sp<AaptAssets>& assets,
         }
         fclose(fp);
 
+        if (textSymbolsDest != NULL && R == className) {
+            String8 textDest(textSymbolsDest);
+            textDest.appendPath(className);
+            textDest.append(".txt");
+
+            FILE* fp = fopen(textDest.string(), "w+");
+            if (fp == NULL) {
+                fprintf(stderr, "ERROR: Unable to open text symbol file %s: %s\n",
+                        textDest.string(), strerror(errno));
+                return UNKNOWN_ERROR;
+            }
+            if (bundle->getVerbose()) {
+                printf("  Writing text symbols for class %s.\n", className.string());
+            }
+
+            status_t err = writeTextSymbolClass(fp, assets, includePrivate, symbols,
+                    className);
+            if (err != NO_ERROR) {
+                return err;
+            }
+            fclose(fp);
+        }
+
         // If we were asked to generate a dependency file, we'll go ahead and add this R.java
         // as a target in the dependency file right next to it.
-        if (bundle->getGenDependencies()) {
+        if (bundle->getGenDependencies() && R == className) {
             // Add this R.java to the dependency file
             String8 dependencyFile(bundle->getRClassDir());
             dependencyFile.appendPath("R.java.d");
 
-            fp = fopen(dependencyFile.string(), "a");
+            FILE *fp = fopen(dependencyFile.string(), "a");
             fprintf(fp,"%s \\\n", dest.string());
             fclose(fp);
         }
@@ -2034,7 +2236,6 @@ status_t writeResourceSymbols(Bundle* bundle, const sp<AaptAssets>& assets,
 
     return NO_ERROR;
 }
-
 
 
 class ProguardKeepSet
@@ -2210,7 +2411,7 @@ struct NamespaceAttributePair {
 
 status_t
 writeProguardForXml(ProguardKeepSet* keep, const sp<AaptFile>& layoutFile,
-        const char* startTag, const KeyedVector<String8, NamespaceAttributePair>* tagAttrPairs)
+        const char* startTag, const KeyedVector<String8, Vector<NamespaceAttributePair> >* tagAttrPairs)
 {
     status_t err;
     ResXMLTree tree;
@@ -2254,17 +2455,21 @@ writeProguardForXml(ProguardKeepSet* keep, const sp<AaptFile>& layoutFile,
         } else if (tagAttrPairs != NULL) {
             ssize_t tagIndex = tagAttrPairs->indexOfKey(tag);
             if (tagIndex >= 0) {
-                const NamespaceAttributePair& nsAttr = tagAttrPairs->valueAt(tagIndex);
-                ssize_t attrIndex = tree.indexOfAttribute(nsAttr.ns, nsAttr.attr);
-                if (attrIndex < 0) {
-                    // fprintf(stderr, "%s:%d: <%s> does not have attribute %s:%s.\n",
-                    //        layoutFile->getPrintableSource().string(), tree.getLineNumber(),
-                    //        tag.string(), nsAttr.ns, nsAttr.attr);
-                } else {
-                    size_t len;
-                    addProguardKeepRule(keep,
-                                        String8(tree.getAttributeStringValue(attrIndex, &len)), NULL,
-                                        layoutFile->getPrintableSource(), tree.getLineNumber());
+                const Vector<NamespaceAttributePair>& nsAttrVector = tagAttrPairs->valueAt(tagIndex);
+                for (size_t i = 0; i < nsAttrVector.size(); i++) {
+                    const NamespaceAttributePair& nsAttr = nsAttrVector[i];
+
+                    ssize_t attrIndex = tree.indexOfAttribute(nsAttr.ns, nsAttr.attr);
+                    if (attrIndex < 0) {
+                        // fprintf(stderr, "%s:%d: <%s> does not have attribute %s:%s.\n",
+                        //        layoutFile->getPrintableSource().string(), tree.getLineNumber(),
+                        //        tag.string(), nsAttr.ns, nsAttr.attr);
+                    } else {
+                        size_t len;
+                        addProguardKeepRule(keep,
+                                            String8(tree.getAttributeStringValue(attrIndex, &len)), NULL,
+                                            layoutFile->getPrintableSource(), tree.getLineNumber());
+                    }
                 }
             }
         }
@@ -2280,9 +2485,18 @@ writeProguardForXml(ProguardKeepSet* keep, const sp<AaptFile>& layoutFile,
     return NO_ERROR;
 }
 
-static void addTagAttrPair(KeyedVector<String8, NamespaceAttributePair>* dest,
+static void addTagAttrPair(KeyedVector<String8, Vector<NamespaceAttributePair> >* dest,
         const char* tag, const char* ns, const char* attr) {
-    dest->add(String8(tag), NamespaceAttributePair(ns, attr));
+    String8 tagStr(tag);
+    ssize_t index = dest->indexOfKey(tagStr);
+
+    if (index < 0) {
+        Vector<NamespaceAttributePair> vector;
+        vector.add(NamespaceAttributePair(ns, attr));
+        dest->add(tagStr, vector);
+    } else {
+        dest->editValueAt(index).add(NamespaceAttributePair(ns, attr));
+    }
 }
 
 status_t
@@ -2291,13 +2505,13 @@ writeProguardForLayouts(ProguardKeepSet* keep, const sp<AaptAssets>& assets)
     status_t err;
 
     // tag:attribute pairs that should be checked in layout files.
-    KeyedVector<String8, NamespaceAttributePair> kLayoutTagAttrPairs;
+    KeyedVector<String8, Vector<NamespaceAttributePair> > kLayoutTagAttrPairs;
     addTagAttrPair(&kLayoutTagAttrPairs, "view", NULL, "class");
     addTagAttrPair(&kLayoutTagAttrPairs, "fragment", NULL, "class");
     addTagAttrPair(&kLayoutTagAttrPairs, "fragment", RESOURCES_ANDROID_NAMESPACE, "name");
 
     // tag:attribute pairs that should be checked in xml files.
-    KeyedVector<String8, NamespaceAttributePair> kXmlTagAttrPairs;
+    KeyedVector<String8, Vector<NamespaceAttributePair> > kXmlTagAttrPairs;
     addTagAttrPair(&kXmlTagAttrPairs, "PreferenceScreen", RESOURCES_ANDROID_NAMESPACE, "fragment");
     addTagAttrPair(&kXmlTagAttrPairs, "header", RESOURCES_ANDROID_NAMESPACE, "fragment");
 
@@ -2307,7 +2521,7 @@ writeProguardForLayouts(ProguardKeepSet* keep, const sp<AaptAssets>& assets)
         const sp<AaptDir>& d = dirs.itemAt(k);
         const String8& dirName = d->getLeaf();
         const char* startTag = NULL;
-        const KeyedVector<String8, NamespaceAttributePair>* tagAttrPairs = NULL;
+        const KeyedVector<String8, Vector<NamespaceAttributePair> >* tagAttrPairs = NULL;
         if ((dirName == String8("layout")) || (strncmp(dirName.string(), "layout-", 7) == 0)) {
             tagAttrPairs = &kLayoutTagAttrPairs;
         } else if ((dirName == String8("xml")) || (strncmp(dirName.string(), "xml-", 4) == 0)) {
@@ -2339,6 +2553,7 @@ writeProguardForLayouts(ProguardKeepSet* keep, const sp<AaptAssets>& assets)
     if (overlay.get()) {
         return writeProguardForLayouts(keep, overlay);
     }
+
     return NO_ERROR;
 }
 

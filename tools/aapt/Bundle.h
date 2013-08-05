@@ -38,6 +38,7 @@ typedef enum Command {
     kCommandRemove,
     kCommandPackage,
     kCommandCrunch,
+    kCommandSingleCrunch,
 } Command;
 
 /*
@@ -51,9 +52,8 @@ public:
           mUpdate(false), mExtending(false),
           mRequireLocalization(false), mPseudolocalize(false),
           mWantUTF16(false), mValues(false),
-          mCompressionMethod(0), mOutputAPKFile(NULL),
+          mCompressionMethod(0), mJunkPath(false), mOutputAPKFile(NULL),
           mManifestPackageNameOverride(NULL), mInstrumentationPackageNameOverride(NULL),
-          mIsOverlayPackage(false),
           mAutoAddOverlay(false), mGenDependencies(false),
           mAssetSourceDir(NULL), 
           mCrunchedOutputDir(NULL), mProguardFile(NULL),
@@ -62,7 +62,9 @@ public:
           mMinSdkVersion(NULL), mTargetSdkVersion(NULL), mMaxSdkVersion(NULL),
           mVersionCode(NULL), mVersionName(NULL), mCustomPackage(NULL), mExtraPackages(NULL),
           mMaxResVersion(NULL), mDebugMode(false), mNonConstantId(false), mProduct(NULL),
-          mUseCrunchCache(false), mArgc(0), mArgv(NULL)
+          mUseCrunchCache(false), mErrorOnFailedInsert(false), mOutputTextSymbols(NULL),
+          mSingleCrunchInputFile(NULL), mSingleCrunchOutputFile(NULL),
+          mArgc(0), mArgv(NULL)
         {}
     ~Bundle(void) {}
 
@@ -107,12 +109,12 @@ public:
     void setManifestPackageNameOverride(const char * val) { mManifestPackageNameOverride = val; }
     const char* getInstrumentationPackageNameOverride() const { return mInstrumentationPackageNameOverride; }
     void setInstrumentationPackageNameOverride(const char * val) { mInstrumentationPackageNameOverride = val; }
-    bool getIsOverlayPackage() const { return mIsOverlayPackage; }
-    void setIsOverlayPackage(bool val) { mIsOverlayPackage = val; }
     bool getAutoAddOverlay() { return mAutoAddOverlay; }
     void setAutoAddOverlay(bool val) { mAutoAddOverlay = val; }
     bool getGenDependencies() { return mGenDependencies; }
     void setGenDependencies(bool val) { mGenDependencies = val; }
+    bool getErrorOnFailedInsert() { return mErrorOnFailedInsert; }
+    void setErrorOnFailedInsert(bool val) { mErrorOnFailedInsert = val; }
 
     bool getUTF16StringsOption() {
         return mWantUTF16 || !isMinSdkAtLeast(SDK_FROYO);
@@ -174,6 +176,12 @@ public:
     void setProduct(const char * val) { mProduct = val; }
     void setUseCrunchCache(bool val) { mUseCrunchCache = val; }
     bool getUseCrunchCache() const { return mUseCrunchCache; }
+    const char* getOutputTextSymbols() const { return mOutputTextSymbols; }
+    void setOutputTextSymbols(const char* val) { mOutputTextSymbols = val; }
+    const char* getSingleCrunchInputFile() const { return mSingleCrunchInputFile; }
+    void setSingleCrunchInputFile(const char* val) { mSingleCrunchInputFile = val; }
+    const char* getSingleCrunchOutputFile() const { return mSingleCrunchOutputFile; }
+    void setSingleCrunchOutputFile(const char* val) { mSingleCrunchOutputFile = val; }
 
     /*
      * Set and get the file specification.
@@ -250,7 +258,6 @@ private:
     const char* mOutputAPKFile;
     const char* mManifestPackageNameOverride;
     const char* mInstrumentationPackageNameOverride;
-    bool        mIsOverlayPackage;
     bool        mAutoAddOverlay;
     bool        mGenDependencies;
     const char* mAssetSourceDir;
@@ -280,6 +287,10 @@ private:
     bool        mNonConstantId;
     const char* mProduct;
     bool        mUseCrunchCache;
+    bool        mErrorOnFailedInsert;
+    const char* mOutputTextSymbols;
+    const char* mSingleCrunchInputFile;
+    const char* mSingleCrunchOutputFile;
 
     /* file specification */
     int         mArgc;

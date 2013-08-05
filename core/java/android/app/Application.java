@@ -22,6 +22,7 @@ import android.content.ComponentCallbacks;
 import android.content.ComponentCallbacks2;
 import android.content.Context;
 import android.content.ContextWrapper;
+import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Bundle;
 
@@ -45,6 +46,7 @@ public class Application extends ContextWrapper implements ComponentCallbacks2 {
             new ArrayList<ComponentCallbacks>();
     private ArrayList<ActivityLifecycleCallbacks> mActivityLifecycleCallbacks =
             new ArrayList<ActivityLifecycleCallbacks>();
+    private ArrayList<OnProvideAssistDataListener> mAssistCallbacks = null;
 
     /** @hide */
     public LoadedApk mLoadedApk;
@@ -59,16 +61,32 @@ public class Application extends ContextWrapper implements ComponentCallbacks2 {
         void onActivityDestroyed(Activity activity);
     }
 
+    /**
+     * Callback interface for use with {@link Application#registerOnProvideAssistDataListener}
+     * and {@link Application#unregisterOnProvideAssistDataListener}.
+     */
+    public interface OnProvideAssistDataListener {
+        /**
+         * This is called when the user is requesting an assist, to build a full
+         * {@link Intent#ACTION_ASSIST} Intent with all of the context of the current
+         * application.  You can override this method to place into the bundle anything
+         * you would like to appear in the {@link Intent#EXTRA_ASSIST_CONTEXT} part
+         * of the assist Intent.
+         */
+        public void onProvideAssistData(Activity activity, Bundle data);
+    }
+
     public Application() {
         super(null);
     }
 
     /**
-     * Called when the application is starting, before any other application
-     * objects have been created.  Implementations should be as quick as
-     * possible (for example using lazy initialization of state) since the time
-     * spent in this function directly impacts the performance of starting the
-     * first activity, service, or receiver in a process.
+     * Called when the application is starting, before any activity, service,
+     * or receiver objects (excluding content providers) have been created.
+     * Implementations should be as quick as possible (for example using 
+     * lazy initialization of state) since the time spent in this function
+     * directly impacts the performance of starting the first activity,
+     * service, or receiver in a process.
      * If you override this method, be sure to call super.onCreate().
      */
     public void onCreate() {
@@ -136,7 +154,24 @@ public class Application extends ContextWrapper implements ComponentCallbacks2 {
             mActivityLifecycleCallbacks.remove(callback);
         }
     }
-    
+
+    public void registerOnProvideAssistDataListener(OnProvideAssistDataListener callback) {
+        synchronized (this) {
+            if (mAssistCallbacks == null) {
+                mAssistCallbacks = new ArrayList<OnProvideAssistDataListener>();
+            }
+            mAssistCallbacks.add(callback);
+        }
+    }
+
+    public void unregisterOnProvideAssistDataListener(OnProvideAssistDataListener callback) {
+        synchronized (this) {
+            if (mAssistCallbacks != null) {
+                mAssistCallbacks.remove(callback);
+            }
+        }
+    }
+
     // ------------------ Internal API ------------------
     
     /**
@@ -230,5 +265,20 @@ public class Application extends ContextWrapper implements ComponentCallbacks2 {
             }
         }
         return callbacks;
+    }
+
+    /* package */ void dispatchOnProvideAssistData(Activity activity, Bundle data) {
+        Object[] callbacks;
+        synchronized (this) {
+            if (mAssistCallbacks == null) {
+                return;
+            }
+            callbacks = mAssistCallbacks.toArray();
+        }
+        if (callbacks != null) {
+            for (int i=0; i<callbacks.length; i++) {
+                ((OnProvideAssistDataListener)callbacks[i]).onProvideAssistData(activity, data);
+            }
+        }
     }
 }

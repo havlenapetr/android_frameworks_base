@@ -16,9 +16,14 @@
 
 package android.media;
 
+import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.res.AssetFileDescriptor;
+import android.net.Proxy;
+import android.net.ProxyProperties;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -328,8 +333,8 @@ import java.lang.ref.WeakReference;
  *         the state. Calling this method in an invalid state transfers the
  *         object to the <em>Error</em> state. </p></td></tr>
  * <tr><td>pause </p></td>
- *     <td>{Started, Paused}</p></td>
- *     <td>{Idle, Initialized, Prepared, Stopped, PlaybackCompleted, Error}</p></td>
+ *     <td>{Started, Paused, PlaybackCompleted}</p></td>
+ *     <td>{Idle, Initialized, Prepared, Stopped, Error}</p></td>
  *     <td>Successful invoke of this method in a valid state transfers the
  *         object to the <em>Paused</em> state. Calling this method in an
  *         invalid state transfers the object to the <em>Error</em> state.</p></td></tr>
@@ -706,7 +711,7 @@ public class MediaPlayer
      * surface rendering area. When the surface has the same aspect ratio
      * as the content, the aspect ratio of the content is maintained;
      * otherwise, the aspect ratio of the content is not maintained when video
-     * is being rendered. Unlike {@ #VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING},
+     * is being rendered. Unlike {@link #VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING},
      * there is no content cropping with this video scaling mode.
      */
     public static final int VIDEO_SCALING_MODE_SCALE_TO_FIT = 1;
@@ -864,6 +869,7 @@ public class MediaPlayer
      */
     public void setDataSource(Context context, Uri uri, Map<String, String> headers)
         throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
+        disableProxyListener();
 
         String scheme = uri.getScheme();
         if(scheme == null || scheme.equals("file")) {
@@ -896,8 +902,13 @@ public class MediaPlayer
         }
 
         Log.d(TAG, "Couldn't open file on client side, trying server side");
+
         setDataSource(uri.toString(), headers);
-        return;
+
+        if (scheme.equalsIgnoreCase("http")
+                || scheme.equalsIgnoreCase("https")) {
+            setupProxyListener(context);
+        }
     }
 
     /**
@@ -948,7 +959,14 @@ public class MediaPlayer
 
     private void setDataSource(String path, String[] keys, String[] values)
             throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
-        File file = new File(path);
+        disableProxyListener();
+
+        final Uri uri = Uri.parse(path);
+        if ("file".equals(uri.getScheme())) {
+            path = uri.getPath();
+        }
+
+        final File file = new File(path);
         if (file.exists()) {
             FileInputStream is = new FileInputStream(file);
             FileDescriptor fd = is.getFD();
@@ -986,7 +1004,13 @@ public class MediaPlayer
      * @param length the length in bytes of the data to be played
      * @throws IllegalStateException if it is called in an invalid state
      */
-    public native void setDataSource(FileDescriptor fd, long offset, long length)
+    public void setDataSource(FileDescriptor fd, long offset, long length)
+            throws IOException, IllegalArgumentException, IllegalStateException {
+        disableProxyListener();
+        _setDataSource(fd, offset, length);
+    }
+
+    private native void _setDataSource(FileDescriptor fd, long offset, long length)
             throws IOException, IllegalArgumentException, IllegalStateException;
 
     /**
@@ -1152,6 +1176,8 @@ public class MediaPlayer
      * Checks whether the MediaPlayer is playing.
      *
      * @return true if currently playing, false otherwise
+     * @throws IllegalStateException if the internal player engine has not been
+     * initialized or has been released.
      */
     public native boolean isPlaying();
 
@@ -1174,7 +1200,8 @@ public class MediaPlayer
     /**
      * Gets the duration of the file.
      *
-     * @return the duration in milliseconds
+     * @return the duration in milliseconds, if no duration is available
+     *         (for example, if streaming live content), -1 is returned.
      */
     public native int getDuration();
 
@@ -1324,6 +1351,8 @@ public class MediaPlayer
         _reset();
         // make sure none of the listeners get called anymore
         mEventHandler.removeCallbacksAndMessages(null);
+
+        disableProxyListener();
     }
 
     private native void _reset();
@@ -1359,13 +1388,26 @@ public class MediaPlayer
      * within an application. Unless you are writing an application to
      * control user settings, this API should be used in preference to
      * {@link AudioManager#setStreamVolume(int, int, int)} which sets the volume of ALL streams of
-     * a particular type. Note that the passed volume values are raw scalars.
+     * a particular type. Note that the passed volume values are raw scalars in range 0.0 to 1.0.
      * UI controls should be scaled logarithmically.
      *
      * @param leftVolume left volume scalar
      * @param rightVolume right volume scalar
      */
+    /*
+     * FIXME: Merge this into javadoc comment above when setVolume(float) is not @hide.
+     * The single parameter form below is preferred if the channel volumes don't need
+     * to be set independently.
+     */
     public native void setVolume(float leftVolume, float rightVolume);
+
+    /**
+     * Similar, excepts sets volume of all channels to same value.
+     * @hide
+     */
+    public void setVolume(float volume) {
+        setVolume(volume, volume);
+    }
 
     /**
      * Currently not implemented, returns null.
@@ -2024,6 +2066,7 @@ public class MediaPlayer
                     if (msg.obj instanceof Parcel) {
                         Parcel parcel = (Parcel)msg.obj;
                         TimedText text = new TimedText(parcel);
+                        parcel.recycle();
                         mOnTimedTextListener.onTimedText(mMediaPlayer, text);
                     }
                 }
@@ -2262,6 +2305,16 @@ public class MediaPlayer
      */
     public static final int MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK = 200;
 
+    /** File or network related operation errors. */
+    public static final int MEDIA_ERROR_IO = -1004;
+    /** Bitstream is not conforming to the related coding standard or file spec. */
+    public static final int MEDIA_ERROR_MALFORMED = -1007;
+    /** Bitstream is conforming to the related coding standard or file spec, but
+     * the media framework does not support the feature. */
+    public static final int MEDIA_ERROR_UNSUPPORTED = -1010;
+    /** Some operation takes too long to complete, usually more than 3-5 seconds. */
+    public static final int MEDIA_ERROR_TIMED_OUT = -110;
+
     /**
      * Interface definition of a callback to be invoked when there
      * has been an error during an asynchronous operation (other errors
@@ -2279,7 +2332,13 @@ public class MediaPlayer
          * <li>{@link #MEDIA_ERROR_SERVER_DIED}
          * </ul>
          * @param extra an extra code, specific to the error. Typically
-         * implementation dependant.
+         * implementation dependent.
+         * <ul>
+         * <li>{@link #MEDIA_ERROR_IO}
+         * <li>{@link #MEDIA_ERROR_MALFORMED}
+         * <li>{@link #MEDIA_ERROR_UNSUPPORTED}
+         * <li>{@link #MEDIA_ERROR_TIMED_OUT}
+         * </ul>
          * @return True if the method handled the error, false if it didn't.
          * Returning false, or not having an OnErrorListener at all, will
          * cause the OnCompletionListener to be called.
@@ -2315,6 +2374,11 @@ public class MediaPlayer
      * @hide
      */
     public static final int MEDIA_INFO_STARTED_AS_NEXT = 2;
+
+    /** The player just pushed the very first video frame for rendering.
+     * @see android.media.MediaPlayer.OnInfoListener
+     */
+    public static final int MEDIA_INFO_VIDEO_RENDERING_START = 3;
 
     /** The video is too complex for the decoder: it can't decode frames fast
      *  enough. Possibly only the audio plays fine at this stage.
@@ -2371,6 +2435,7 @@ public class MediaPlayer
          * <ul>
          * <li>{@link #MEDIA_INFO_UNKNOWN}
          * <li>{@link #MEDIA_INFO_VIDEO_TRACK_LAGGING}
+         * <li>{@link #MEDIA_INFO_VIDEO_RENDERING_START}
          * <li>{@link #MEDIA_INFO_BUFFERING_START}
          * <li>{@link #MEDIA_INFO_BUFFERING_END}
          * <li>{@link #MEDIA_INFO_BAD_INTERLEAVING}
@@ -2378,7 +2443,7 @@ public class MediaPlayer
          * <li>{@link #MEDIA_INFO_METADATA_UPDATE}
          * </ul>
          * @param extra an extra code, specific to the info. Typically
-         * implementation dependant.
+         * implementation dependent.
          * @return True if the method handled the info, false if it didn't.
          * Returning false, or not having an OnErrorListener at all, will
          * cause the info to be discarded.
@@ -2405,4 +2470,57 @@ public class MediaPlayer
         return (mode == VIDEO_SCALING_MODE_SCALE_TO_FIT ||
                 mode == VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING);
     }
+
+    private Context mProxyContext = null;
+    private ProxyReceiver mProxyReceiver = null;
+
+    private void setupProxyListener(Context context) {
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Proxy.PROXY_CHANGE_ACTION);
+        mProxyReceiver = new ProxyReceiver();
+        mProxyContext = context;
+
+        Intent currentProxy =
+            context.getApplicationContext().registerReceiver(mProxyReceiver, filter);
+
+        if (currentProxy != null) {
+            handleProxyBroadcast(currentProxy);
+        }
+    }
+
+    private void disableProxyListener() {
+        if (mProxyReceiver == null) {
+            return;
+        }
+
+        Context appContext = mProxyContext.getApplicationContext();
+        if (appContext != null) {
+            appContext.unregisterReceiver(mProxyReceiver);
+        }
+
+        mProxyReceiver = null;
+        mProxyContext = null;
+    }
+
+    private void handleProxyBroadcast(Intent intent) {
+        ProxyProperties props =
+            (ProxyProperties)intent.getExtra(Proxy.EXTRA_PROXY_INFO);
+
+        if (props == null || props.getHost() == null) {
+            updateProxyConfig(null);
+        } else {
+            updateProxyConfig(props);
+        }
+    }
+
+    private class ProxyReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent.getAction().equals(Proxy.PROXY_CHANGE_ACTION)) {
+                handleProxyBroadcast(intent);
+            }
+        }
+    }
+
+    private native void updateProxyConfig(ProxyProperties props);
 }

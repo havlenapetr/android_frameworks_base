@@ -23,15 +23,20 @@ import android.os.Bundle;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.SystemProperties;
+import android.telephony.Rlog;
 
 import com.android.internal.telephony.IPhoneSubInfo;
 import com.android.internal.telephony.ITelephony;
 import com.android.internal.telephony.ITelephonyRegistry;
-import com.android.internal.telephony.Phone;
-import com.android.internal.telephony.PhoneFactory;
+import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.telephony.RILConstants;
 import com.android.internal.telephony.TelephonyProperties;
 
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Provides access to information about the telephony services on
@@ -54,19 +59,19 @@ import java.util.List;
 public class TelephonyManager {
     private static final String TAG = "TelephonyManager";
 
-    private static Context sContext;
     private static ITelephonyRegistry sRegistry;
+    private final Context mContext;
 
     /** @hide */
     public TelephonyManager(Context context) {
-        if (sContext == null) {
-            Context appContext = context.getApplicationContext();
-            if (appContext != null) {
-                sContext = appContext;
-            } else {
-                sContext = context;
-            }
+        Context appContext = context.getApplicationContext();
+        if (appContext != null) {
+            mContext = appContext;
+        } else {
+            mContext = context;
+        }
 
+        if (sRegistry == null) {
             sRegistry = ITelephonyRegistry.Stub.asInterface(ServiceManager.getService(
                     "telephony.registry"));
         }
@@ -74,6 +79,7 @@ public class TelephonyManager {
 
     /** @hide */
     private TelephonyManager() {
+        mContext = null;
     }
 
     private static TelephonyManager sInstance = new TelephonyManager();
@@ -120,6 +126,28 @@ public class TelephonyManager {
             "android.intent.action.PHONE_STATE";
 
     /**
+     * The Phone app sends this intent when a user opts to respond-via-message during an incoming
+     * call. By default, the MMS app consumes this message and sends a text message to the caller. A
+     * third party app can provide this functionality in lieu of MMS app by consuming this Intent
+     * and sending the message using their own messaging system.  The intent contains a URI
+     * describing the recipient, and an EXTRA containing the message itself.
+     * <p class="note"><strong>Note:</strong>
+     * The intent-filter which consumes this Intent needs to be in a service which requires the
+     * permission {@link android.Manifest.permission#SEND_RESPOND_VIA_MESSAGE}.</p>
+     *
+     * <p>
+     * {@link android.content.Intent#getData} is a URI describing the recipient of the message.
+     * <p>
+     * The {@link android.content.Intent#EXTRA_TEXT} extra contains the message
+     * to send.
+     * <p>
+     * Output: nothing.
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_RESPOND_VIA_MESSAGE =
+            "android.intent.action.RESPOND_VIA_MESSAGE";
+
+    /**
      * The lookup key used with the {@link #ACTION_PHONE_STATE_CHANGED} broadcast
      * for a String containing the new call state.
      *
@@ -131,25 +159,25 @@ public class TelephonyManager {
      * Retrieve with
      * {@link android.content.Intent#getStringExtra(String)}.
      */
-    public static final String EXTRA_STATE = Phone.STATE_KEY;
+    public static final String EXTRA_STATE = PhoneConstants.STATE_KEY;
 
     /**
      * Value used with {@link #EXTRA_STATE} corresponding to
      * {@link #CALL_STATE_IDLE}.
      */
-    public static final String EXTRA_STATE_IDLE = Phone.State.IDLE.toString();
+    public static final String EXTRA_STATE_IDLE = PhoneConstants.State.IDLE.toString();
 
     /**
      * Value used with {@link #EXTRA_STATE} corresponding to
      * {@link #CALL_STATE_RINGING}.
      */
-    public static final String EXTRA_STATE_RINGING = Phone.State.RINGING.toString();
+    public static final String EXTRA_STATE_RINGING = PhoneConstants.State.RINGING.toString();
 
     /**
      * Value used with {@link #EXTRA_STATE} corresponding to
      * {@link #CALL_STATE_OFFHOOK}.
      */
-    public static final String EXTRA_STATE_OFFHOOK = Phone.State.OFFHOOK.toString();
+    public static final String EXTRA_STATE_OFFHOOK = PhoneConstants.State.OFFHOOK.toString();
 
     /**
      * The lookup key used with the {@link #ACTION_PHONE_STATE_CHANGED} broadcast
@@ -206,7 +234,14 @@ public class TelephonyManager {
 
     /**
      * Returns the current location of the device.
-     * Return null if current location is not available.
+     *<p>
+     * If there is only one radio in the device and that radio has an LTE connection,
+     * this method will return null. The implementation must not to try add LTE
+     * identifiers into the existing cdma/gsm classes.
+     *<p>
+     * In the future this call will be deprecated.
+     *<p>
+     * @return Current location of the device or null if not available.
      *
      * <p>Requires Permission:
      * {@link android.Manifest.permission#ACCESS_COARSE_LOCATION ACCESS_COARSE_LOCATION} or
@@ -215,6 +250,7 @@ public class TelephonyManager {
     public CellLocation getCellLocation() {
         try {
             Bundle bundle = getITelephony().getCellLocation();
+            if (bundle.isEmpty()) return null;
             CellLocation cl = CellLocation.newFromBundle(bundle);
             if (cl.isEmpty())
                 return null;
@@ -261,8 +297,11 @@ public class TelephonyManager {
     }
 
     /**
-     * Returns the neighboring cell information of the device.
-     *
+     * Returns the neighboring cell information of the device. The getAllCellInfo is preferred
+     * and use this only if getAllCellInfo return nulls or an empty list.
+     *<p>
+     * In the future this call will be deprecated.
+     *<p>
      * @return List of NeighboringCellInfo or null if info unavailable.
      *
      * <p>Requires Permission:
@@ -270,7 +309,7 @@ public class TelephonyManager {
      */
     public List<NeighboringCellInfo> getNeighboringCellInfo() {
         try {
-            return getITelephony().getNeighboringCellInfo();
+            return getITelephony().getNeighboringCellInfo(mContext.getBasePackageName());
         } catch (RemoteException ex) {
             return null;
         } catch (NullPointerException ex) {
@@ -279,13 +318,13 @@ public class TelephonyManager {
     }
 
     /** No phone radio. */
-    public static final int PHONE_TYPE_NONE = Phone.PHONE_TYPE_NONE;
+    public static final int PHONE_TYPE_NONE = PhoneConstants.PHONE_TYPE_NONE;
     /** Phone radio is GSM. */
-    public static final int PHONE_TYPE_GSM = Phone.PHONE_TYPE_GSM;
+    public static final int PHONE_TYPE_GSM = PhoneConstants.PHONE_TYPE_GSM;
     /** Phone radio is CDMA. */
-    public static final int PHONE_TYPE_CDMA = Phone.PHONE_TYPE_CDMA;
+    public static final int PHONE_TYPE_CDMA = PhoneConstants.PHONE_TYPE_CDMA;
     /** Phone is via SIP. */
-    public static final int PHONE_TYPE_SIP = Phone.PHONE_TYPE_SIP;
+    public static final int PHONE_TYPE_SIP = PhoneConstants.PHONE_TYPE_SIP;
 
     /**
      * Returns the current phone type.
@@ -348,8 +387,127 @@ public class TelephonyManager {
         int mode = SystemProperties.getInt("ro.telephony.default_network", -1);
         if (mode == -1)
             return PHONE_TYPE_NONE;
-        return PhoneFactory.getPhoneType(mode);
+        return getPhoneType(mode);
     }
+
+    /**
+     * This function returns the type of the phone, depending
+     * on the network mode.
+     *
+     * @param networkMode
+     * @return Phone Type
+     *
+     * @hide
+     */
+    public static int getPhoneType(int networkMode) {
+        switch(networkMode) {
+        case RILConstants.NETWORK_MODE_CDMA:
+        case RILConstants.NETWORK_MODE_CDMA_NO_EVDO:
+        case RILConstants.NETWORK_MODE_EVDO_NO_CDMA:
+            return PhoneConstants.PHONE_TYPE_CDMA;
+
+        case RILConstants.NETWORK_MODE_WCDMA_PREF:
+        case RILConstants.NETWORK_MODE_GSM_ONLY:
+        case RILConstants.NETWORK_MODE_WCDMA_ONLY:
+        case RILConstants.NETWORK_MODE_GSM_UMTS:
+        case RILConstants.NETWORK_MODE_LTE_GSM_WCDMA:
+        case RILConstants.NETWORK_MODE_LTE_WCDMA:
+            return PhoneConstants.PHONE_TYPE_GSM;
+
+        // Use CDMA Phone for the global mode including CDMA
+        case RILConstants.NETWORK_MODE_GLOBAL:
+        case RILConstants.NETWORK_MODE_LTE_CDMA_EVDO:
+        case RILConstants.NETWORK_MODE_LTE_CMDA_EVDO_GSM_WCDMA:
+            return PhoneConstants.PHONE_TYPE_CDMA;
+
+        case RILConstants.NETWORK_MODE_LTE_ONLY:
+            if (getLteOnCdmaModeStatic() == PhoneConstants.LTE_ON_CDMA_TRUE) {
+                return PhoneConstants.PHONE_TYPE_CDMA;
+            } else {
+                return PhoneConstants.PHONE_TYPE_GSM;
+            }
+        default:
+            return PhoneConstants.PHONE_TYPE_GSM;
+        }
+    }
+
+    /**
+     * The contents of the /proc/cmdline file
+     */
+    private static String getProcCmdLine()
+    {
+        String cmdline = "";
+        FileInputStream is = null;
+        try {
+            is = new FileInputStream("/proc/cmdline");
+            byte [] buffer = new byte[2048];
+            int count = is.read(buffer);
+            if (count > 0) {
+                cmdline = new String(buffer, 0, count);
+            }
+        } catch (IOException e) {
+            Rlog.d(TAG, "No /proc/cmdline exception=" + e);
+        } finally {
+            if (is != null) {
+                try {
+                    is.close();
+                } catch (IOException e) {
+                }
+            }
+        }
+        Rlog.d(TAG, "/proc/cmdline=" + cmdline);
+        return cmdline;
+    }
+
+    /** Kernel command line */
+    private static final String sKernelCmdLine = getProcCmdLine();
+
+    /** Pattern for selecting the product type from the kernel command line */
+    private static final Pattern sProductTypePattern =
+        Pattern.compile("\\sproduct_type\\s*=\\s*(\\w+)");
+
+    /** The ProductType used for LTE on CDMA devices */
+    private static final String sLteOnCdmaProductType =
+        SystemProperties.get(TelephonyProperties.PROPERTY_LTE_ON_CDMA_PRODUCT_TYPE, "");
+
+    /**
+     * Return if the current radio is LTE on CDMA. This
+     * is a tri-state return value as for a period of time
+     * the mode may be unknown.
+     *
+     * @return {@link PhoneConstants#LTE_ON_CDMA_UNKNOWN}, {@link PhoneConstants#LTE_ON_CDMA_FALSE}
+     * or {@link PhoneConstants#LTE_ON_CDMA_TRUE}
+     *
+     * @hide
+     */
+    public static int getLteOnCdmaModeStatic() {
+        int retVal;
+        int curVal;
+        String productType = "";
+
+        curVal = SystemProperties.getInt(TelephonyProperties.PROPERTY_LTE_ON_CDMA_DEVICE,
+                    PhoneConstants.LTE_ON_CDMA_UNKNOWN);
+        retVal = curVal;
+        if (retVal == PhoneConstants.LTE_ON_CDMA_UNKNOWN) {
+            Matcher matcher = sProductTypePattern.matcher(sKernelCmdLine);
+            if (matcher.find()) {
+                productType = matcher.group(1);
+                if (sLteOnCdmaProductType.equals(productType)) {
+                    retVal = PhoneConstants.LTE_ON_CDMA_TRUE;
+                } else {
+                    retVal = PhoneConstants.LTE_ON_CDMA_FALSE;
+                }
+            } else {
+                retVal = PhoneConstants.LTE_ON_CDMA_FALSE;
+            }
+        }
+
+        Rlog.d(TAG, "getLteOnCdmaMode=" + retVal + " curVal=" + curVal +
+                " product_type='" + productType +
+                "' lteOnCdmaProductType='" + sLteOnCdmaProductType + "'");
+        return retVal;
+    }
+
     //
     //
     // Current Network
@@ -434,6 +592,13 @@ public class TelephonyManager {
     public static final int NETWORK_TYPE_HSPAP = 15;
 
     /**
+     * @return the NETWORK_TYPE_xxxx for current data connection.
+     */
+    public int getNetworkType() {
+        return getDataNetworkType();
+    }
+
+    /**
      * Returns a constant indicating the radio technology (network type)
      * currently in use on the device for data transmission.
      * @return the network type
@@ -454,12 +619,37 @@ public class TelephonyManager {
      * @see #NETWORK_TYPE_LTE
      * @see #NETWORK_TYPE_EHRPD
      * @see #NETWORK_TYPE_HSPAP
+     *
+     * @hide
      */
-    public int getNetworkType() {
+    public int getDataNetworkType() {
         try{
             ITelephony telephony = getITelephony();
             if (telephony != null) {
-                return telephony.getNetworkType();
+                return telephony.getDataNetworkType();
+            } else {
+                // This can happen when the ITelephony interface is not up yet.
+                return NETWORK_TYPE_UNKNOWN;
+            }
+        } catch(RemoteException ex) {
+            // This shouldn't happen in the normal case
+            return NETWORK_TYPE_UNKNOWN;
+        } catch (NullPointerException ex) {
+            // This could happen before phone restarts due to crashing
+            return NETWORK_TYPE_UNKNOWN;
+        }
+    }
+
+    /**
+     * Returns the NETWORK_TYPE_xxxx for voice
+     *
+     * @hide
+     */
+    public int getVoiceNetworkType() {
+        try{
+            ITelephony telephony = getITelephony();
+            if (telephony != null) {
+                return telephony.getVoiceNetworkType();
             } else {
                 // This can happen when the ITelephony interface is not up yet.
                 return NETWORK_TYPE_UNKNOWN;
@@ -685,8 +875,8 @@ public class TelephonyManager {
      * is a tri-state return value as for a period of time
      * the mode may be unknown.
      *
-     * @return {@link Phone#LTE_ON_CDMA_UNKNOWN}, {@link Phone#LTE_ON_CDMA_FALSE}
-     * or {@link Phone#LTE_ON_CDMA_TRUE}
+     * @return {@link PhoneConstants#LTE_ON_CDMA_UNKNOWN}, {@link PhoneConstants#LTE_ON_CDMA_FALSE}
+     * or {@link PhoneConstants#LTE_ON_CDMA_TRUE}
      *
      * @hide
      */
@@ -695,10 +885,10 @@ public class TelephonyManager {
             return getITelephony().getLteOnCdmaMode();
         } catch (RemoteException ex) {
             // Assume no ICC card if remote exception which shouldn't happen
-            return Phone.LTE_ON_CDMA_UNKNOWN;
+            return PhoneConstants.LTE_ON_CDMA_UNKNOWN;
         } catch (NullPointerException ex) {
             // This could happen before phone restarts due to crashing
-            return Phone.LTE_ON_CDMA_UNKNOWN;
+            return PhoneConstants.LTE_ON_CDMA_UNKNOWN;
         }
     }
 
@@ -718,6 +908,24 @@ public class TelephonyManager {
     public String getSubscriberId() {
         try {
             return getSubscriberInfo().getSubscriberId();
+        } catch (RemoteException ex) {
+            return null;
+        } catch (NullPointerException ex) {
+            // This could happen before phone restarts due to crashing
+            return null;
+        }
+    }
+
+    /**
+     * Returns the Group Identifier Level1 for a GSM phone.
+     * Return null if it is unavailable.
+     * <p>
+     * Requires Permission:
+     *   {@link android.Manifest.permission#READ_PHONE_STATE READ_PHONE_STATE}
+     */
+    public String getGroupIdLevel1() {
+        try {
+            return getSubscriberInfo().getGroupIdLevel1();
         } catch (RemoteException ex) {
             return null;
         } catch (NullPointerException ex) {
@@ -1042,9 +1250,9 @@ public class TelephonyManager {
      *               LISTEN_ flags.
      */
     public void listen(PhoneStateListener listener, int events) {
-        String pkgForDebug = sContext != null ? sContext.getPackageName() : "<unknown>";
+        String pkgForDebug = mContext != null ? mContext.getPackageName() : "<unknown>";
         try {
-            Boolean notifyNow = (getITelephony() != null);
+            Boolean notifyNow = true;
             sRegistry.listen(pkgForDebug, listener.callback, events, notifyNow);
         } catch (RemoteException ex) {
             // system process dead
@@ -1120,8 +1328,8 @@ public class TelephonyManager {
      * @hide pending API review
      */
     public boolean isVoiceCapable() {
-        if (sContext == null) return true;
-        return sContext.getResources().getBoolean(
+        if (mContext == null) return true;
+        return mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_voice_capable);
     }
 
@@ -1137,20 +1345,31 @@ public class TelephonyManager {
      * @hide pending API review
      */
     public boolean isSmsCapable() {
-        if (sContext == null) return true;
-        return sContext.getResources().getBoolean(
+        if (mContext == null) return true;
+        return mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_sms_capable);
     }
 
     /**
-     * Returns all observed cell information of the device.
-     *
+     * Returns all observed cell information from all radios on the
+     * device including the primary and neighboring cells. This does
+     * not cause or change the rate of PhoneStateListner#onCellInfoChanged.
+     *<p>
+     * The list can include one or more of {@link android.telephony.CellInfoGsm CellInfoGsm},
+     * {@link android.telephony.CellInfoCdma CellInfoCdma},
+     * {@link android.telephony.CellInfoLte CellInfoLte} and
+     * {@link android.telephony.CellInfoWcdma CellInfoCdma} in any combination.
+     * Specifically on devices with multiple radios it is typical to see instances of
+     * one or more of any these in the list. In addition 0, 1 or more CellInfo
+     * objects may return isRegistered() true.
+     *<p>
+     * This is preferred over using getCellLocation although for older
+     * devices this may return null in which case getCellLocation should
+     * be called.
+     *<p>
      * @return List of CellInfo or null if info unavailable.
      *
-     * <p>Requires Permission:
-     * (@link android.Manifest.permission#ACCESS_COARSE_UPDATES}
-     *
-     * @hide pending API review
+     * <p>Requires Permission: {@link android.Manifest.permission#ACCESS_COARSE_LOCATION}
      */
     public List<CellInfo> getAllCellInfo() {
         try {
@@ -1159,6 +1378,26 @@ public class TelephonyManager {
             return null;
         } catch (NullPointerException ex) {
             return null;
+        }
+    }
+
+    /**
+     * Sets the minimum time in milli-seconds between {@link PhoneStateListener#onCellInfoChanged
+     * PhoneStateListener.onCellInfoChanged} will be invoked.
+     *<p>
+     * The default, 0, means invoke onCellInfoChanged when any of the reported
+     * information changes. Setting the value to INT_MAX(0x7fffffff) means never issue
+     * A onCellInfoChanged.
+     *<p>
+     * @param rateInMillis the rate
+     *
+     * @hide
+     */
+    public void setCellInfoListRate(int rateInMillis) {
+        try {
+            getITelephony().setCellInfoListRate(rateInMillis);
+        } catch (RemoteException ex) {
+        } catch (NullPointerException ex) {
         }
     }
 }

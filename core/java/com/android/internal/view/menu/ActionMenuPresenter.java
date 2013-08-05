@@ -278,7 +278,7 @@ public class ActionMenuPresenter extends BaseMenuPresenter
      */
     public boolean showOverflowMenu() {
         if (mReserveOverflow && !isOverflowMenuShowing() && mMenu != null && mMenuView != null &&
-                mPostedOpenRunnable == null) {
+                mPostedOpenRunnable == null && !mMenu.getNonActionItems().isEmpty()) {
             OverflowPopup popup = new OverflowPopup(mContext, mMenu, mOverflowButton, true);
             mPostedOpenRunnable = new OpenOverflowRunnable(popup);
             // Post this for later; we might still need a layout for the anchor to be right.
@@ -476,6 +476,9 @@ public class ActionMenuPresenter extends BaseMenuPresenter
                 if (isAction) maxActions--;
 
                 item.setIsActionButton(isAction);
+            } else {
+                // Neither requires nor requests an action button.
+                item.setIsActionButton(false);
             }
         }
         return true;
@@ -575,6 +578,16 @@ public class ActionMenuPresenter extends BaseMenuPresenter
 
         public boolean needsDividerAfter() {
             return false;
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.AT_MOST) {
+                // Fill available height
+                heightMeasureSpec = MeasureSpec.makeMeasureSpec(
+                        MeasureSpec.getSize(heightMeasureSpec), MeasureSpec.EXACTLY);
+            }
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
         }
     }
 

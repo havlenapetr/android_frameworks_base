@@ -17,9 +17,6 @@
 
 package android.provider;
 
-import com.android.internal.telephony.CallerInfo;
-import com.android.internal.telephony.Connection;
-
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -29,6 +26,9 @@ import android.provider.ContactsContract.CommonDataKinds.Callable;
 import android.provider.ContactsContract.CommonDataKinds.Phone;
 import android.provider.ContactsContract.DataUsageFeedback;
 import android.text.TextUtils;
+
+import com.android.internal.telephony.CallerInfo;
+import com.android.internal.telephony.PhoneConstants;
 
 /**
  * The CallLog provider contains information about placed and received calls.
@@ -57,6 +57,20 @@ public class CallLog {
          */
         public static final Uri CONTENT_FILTER_URI =
                 Uri.parse("content://call_log/calls/filter");
+
+        /**
+         * Query parameter used to limit the number of call logs returned.
+         * <p>
+         * TYPE: integer
+         */
+        public static final String LIMIT_PARAM_KEY = "limit";
+
+        /**
+         * Query parameter used to specify the starting record to return.
+         * <p>
+         * TYPE: integer
+         */
+        public static final String OFFSET_PARAM_KEY = "offset";
 
         /**
          * An optional URI parameter which instructs the provider to allow the operation to be
@@ -267,14 +281,14 @@ public class CallLog {
 
             // If this is a private number then set the number to Private, otherwise check
             // if the number field is empty and set the number to Unavailable
-            if (presentation == Connection.PRESENTATION_RESTRICTED) {
+            if (presentation == PhoneConstants.PRESENTATION_RESTRICTED) {
                 number = CallerInfo.PRIVATE_NUMBER;
                 if (ci != null) ci.name = "";
-            } else if (presentation == Connection.PRESENTATION_PAYPHONE) {
+            } else if (presentation == PhoneConstants.PRESENTATION_PAYPHONE) {
                 number = CallerInfo.PAYPHONE_NUMBER;
                 if (ci != null) ci.name = "";
             } else if (TextUtils.isEmpty(number)
-                    || presentation == Connection.PRESENTATION_UNKNOWN) {
+                    || presentation == PhoneConstants.PRESENTATION_UNKNOWN) {
                 number = CallerInfo.UNKNOWN_NUMBER;
                 if (ci != null) ci.name = "";
             }

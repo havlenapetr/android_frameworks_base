@@ -34,6 +34,8 @@
 
 #include "VideoEditorMain.h"
 
+#include <android_runtime/android_view_Surface.h>
+
 extern "C" {
 #include <M4OSA_Clock.h>
 #include <M4OSA_CharStar.h>
@@ -380,6 +382,9 @@ getClipSetting(
                     pEnv->GetIntField(object,fid);
    M4OSA_TRACE1_1("videoRotation = %d",
                     pSettings->ClipProperties.videoRotationDegrees);
+
+   // Free the local references to avoid memory leaks
+   pEnv->DeleteLocalRef(clazz);
 }
 
 static void jniPreviewProgressCallback (void* cookie, M4OSA_UInt32 msgType,
@@ -625,19 +630,8 @@ static void videoEditor_clearSurface(JNIEnv* pEnv,
                                                 (NULL == surface),
                                                 "surface is null");
 
-    jclass surfaceClass = pEnv->FindClass("android/view/Surface");
-    videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
-                                             (M4OSA_NULL == surfaceClass),
-                                             "not initialized");
+    sp<Surface> previewSurface = android_view_Surface_getSurface(pEnv, surface);
 
-    jfieldID surface_native =
-            pEnv->GetFieldID(surfaceClass, ANDROID_VIEW_SURFACE_JNI_ID, "I");
-    videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
-                                             (M4OSA_NULL == surface_native),
-                                             "not initialized");
-
-    Surface* const p = (Surface*)pEnv->GetIntField(surface, surface_native);
-    sp<Surface> previewSurface = sp<Surface>(p);
     // Validate the mSurface's mNativeSurface field
     videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
                                                 (NULL == previewSurface.get()),
@@ -706,19 +700,9 @@ static int videoEditor_renderPreviewFrame(JNIEnv* pEnv,
     videoEditJava_checkAndThrowIllegalArgumentException(&needToBeLoaded, pEnv,
                                                 (NULL == mSurface),
                                                 "mSurface is null");
-    jclass surfaceClass = pEnv->FindClass("android/view/Surface");
-    videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
-                                             (M4OSA_NULL == surfaceClass),
-                                             "not initialized");
 
-    jfieldID surface_native =
-            pEnv->GetFieldID(surfaceClass, ANDROID_VIEW_SURFACE_JNI_ID, "I");
-    videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
-                                             (M4OSA_NULL == surface_native),
-                                             "not initialized");
+    sp<Surface> previewSurface = android_view_Surface_getSurface(pEnv, mSurface);
 
-    Surface* const p = (Surface*)pEnv->GetIntField(mSurface, surface_native);
-    sp<Surface> previewSurface = sp<Surface>(p);
     // Validate the mSurface's mNativeSurface field
     videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
                                                 (NULL == previewSurface.get()),
@@ -1035,20 +1019,8 @@ static int videoEditor_renderMediaItemPreviewFrame(JNIEnv* pEnv,
     videoEditJava_checkAndThrowIllegalArgumentException(&needToBeLoaded, pEnv,
                                                 (NULL == mSurface),
                                                 "mSurface is null");
-    jclass surfaceClass = pEnv->FindClass("android/view/Surface");
-    videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
-                                             (M4OSA_NULL == surfaceClass),
-                                             "not initialized");
 
-    jfieldID surface_native =
-            pEnv->GetFieldID(surfaceClass, ANDROID_VIEW_SURFACE_JNI_ID, "I");
-    videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
-                                             (M4OSA_NULL == surface_native),
-                                             "not initialized");
-
-    Surface* const p = (Surface*)pEnv->GetIntField(mSurface, surface_native);
-    sp<Surface> previewSurface = sp<Surface>(p);
-
+    sp<Surface> previewSurface = android_view_Surface_getSurface(pEnv, mSurface);
 
     const char *pString = pEnv->GetStringUTFChars(filePath, NULL);
     if (pString == M4OSA_NULL) {
@@ -1849,7 +1821,9 @@ videoEditor_populateSettings(
                 "not initialized");
             if (needToBeLoaded) {
                 getClipSetting(pEnv,properties, pContext->pEditSettings->pClipList[i]);
+                pEnv->DeleteLocalRef(properties);
             } else {
+                pEnv->DeleteLocalRef(properties);
                 goto videoEditor_populateSettings_cleanup;
             }
         }
@@ -2139,21 +2113,8 @@ videoEditor_startPreview(
                                                 (NULL == mSurface),
                                                 "mSurface is null");
 
-    jclass surfaceClass = pEnv->FindClass("android/view/Surface");
-    videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
-                                             (M4OSA_NULL == surfaceClass),
-                                             "not initialized");
-    //jfieldID surface_native = pEnv->GetFieldID(surfaceClass, "mSurface", "I");
-    jfieldID surface_native
-        = pEnv->GetFieldID(surfaceClass, ANDROID_VIEW_SURFACE_JNI_ID, "I");
+    sp<Surface> previewSurface = android_view_Surface_getSurface(pEnv, mSurface);
 
-    videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
-                                             (M4OSA_NULL == surface_native),
-                                             "not initialized");
-
-    Surface* const p = (Surface*)pEnv->GetIntField(mSurface, surface_native);
-
-    sp<Surface> previewSurface = sp<Surface>(p);
     // Validate the mSurface's mNativeSurface field
     videoEditJava_checkAndThrowIllegalStateException(&needToBeLoaded, pEnv,
                                                 (NULL == previewSurface.get()),

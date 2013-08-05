@@ -81,14 +81,26 @@ public class CdmaCellLocation extends CellLocation {
     }
 
     /**
-     * @return cdma base station latitude, Integer.MAX_VALUE if unknown
+     * Latitude is a decimal number as specified in 3GPP2 C.S0005-A v6.0.
+     * (http://www.3gpp2.org/public_html/specs/C.S0005-A_v6.0.pdf)
+     * It is represented in units of 0.25 seconds and ranges from -1296000
+     * to 1296000, both values inclusive (corresponding to a range of -90
+     * to +90 degrees). Integer.MAX_VALUE is considered invalid value.
+     *
+     * @return cdma base station latitude in units of 0.25 seconds, Integer.MAX_VALUE if unknown
      */
     public int getBaseStationLatitude() {
         return this.mBaseStationLatitude;
     }
 
     /**
-     * @return cdma base station longitude, Integer.MAX_VALUE if unknown
+     * Longitude is a decimal number as specified in 3GPP2 C.S0005-A v6.0.
+     * (http://www.3gpp2.org/public_html/specs/C.S0005-A_v6.0.pdf)
+     * It is represented in units of 0.25 seconds and ranges from -2592000
+     * to 2592000, both values inclusive (corresponding to a range of -180
+     * to +180 degrees). Integer.MAX_VALUE is considered invalid value.
+     *
+     * @return cdma base station longitude in units of 0.25 seconds, Integer.MAX_VALUE if unknown
      */
     public int getBaseStationLongitude() {
         return this.mBaseStationLongitude;
@@ -215,6 +227,22 @@ public class CdmaCellLocation extends CellLocation {
                 this.mNetworkId == -1);
     }
 
+    /**
+     * Converts latitude or longitude from 0.25 seconds (as defined in the
+     * 3GPP2 C.S0005-A v6.0 standard) to decimal degrees
+     *
+     * @param quartSec latitude or longitude in 0.25 seconds units
+     * @return latitude or longitude in decimal degrees units
+     * @throws IllegalArgumentException if value is less than -2592000,
+     *                                  greater than 2592000, or is not a number.
+     */
+    public static double convertQuartSecToDecDegrees(int quartSec) {
+        if(Double.isNaN(quartSec) || quartSec < -2592000 || quartSec > 2592000){
+            // Invalid value
+            throw new IllegalArgumentException("Invalid coordiante value:" + quartSec);
+        }
+        return ((double)quartSec) / (3600 * 4);
+    }
 
 }
 

@@ -172,6 +172,7 @@ public class MediaFile {
 
     static {
         addFileType("MP3", FILE_TYPE_MP3, "audio/mpeg", MtpConstants.FORMAT_MP3);
+        addFileType("MPGA", FILE_TYPE_MP3, "audio/mpeg", MtpConstants.FORMAT_MP3);
         addFileType("M4A", FILE_TYPE_M4A, "audio/mp4", MtpConstants.FORMAT_MPEG);
         addFileType("WAV", FILE_TYPE_WAV, "audio/x-wav", MtpConstants.FORMAT_WAV);
         addFileType("AMR", FILE_TYPE_AMR, "audio/amr");
@@ -324,7 +325,7 @@ public class MediaFile {
         }
         int lastDot = fileName.lastIndexOf('.');
         if (lastDot > 0) {
-            String extension = fileName.substring(lastDot + 1);
+            String extension = fileName.substring(lastDot + 1).toUpperCase();
             Integer value = sFileTypeToFormatMap.get(extension);
             if (value != null) {
                 return value.intValue();

@@ -54,7 +54,7 @@ StubClass::StubClass(Type* type, Type* interfaceType)
 
     // asBinder
     Method* asBinder = new Method;
-        asBinder->modifiers = PUBLIC;
+        asBinder->modifiers = PUBLIC | OVERRIDE;
         asBinder->returnType = IBINDER_TYPE;
         asBinder->name = "asBinder";
         asBinder->statements = new StatementBlock;
@@ -117,7 +117,7 @@ StubClass::make_as_interface(Type *interfaceType)
     queryLocalInterface->arguments.push_back(new LiteralExpression("DESCRIPTOR"));
     IInterfaceType* iinType = new IInterfaceType();
     Variable *iin = new Variable(iinType, "iin");
-    VariableDeclaration* iinVd = new VariableDeclaration(iin, queryLocalInterface, iinType);
+    VariableDeclaration* iinVd = new VariableDeclaration(iin, queryLocalInterface, NULL);
     m->statements->Add(iinVd);
 
     // Ensure the instance type of the local object is as expected.
@@ -181,7 +181,7 @@ ProxyClass::ProxyClass(Type* type, InterfaceType* interfaceType)
 
     // IBinder asBinder()
     Method* asBinder = new Method;
-        asBinder->modifiers = PUBLIC;
+        asBinder->modifiers = PUBLIC | OVERRIDE;
         asBinder->returnType = IBINDER_TYPE;
         asBinder->name = "asBinder";
         asBinder->statements = new StatementBlock;
@@ -260,7 +260,7 @@ generate_method(const method_type* method, Class* interface,
     string transactCodeName = "TRANSACTION_";
     transactCodeName += method->name.data;
 
-    char transactCodeValue[50];
+    char transactCodeValue[60];
     sprintf(transactCodeValue, "(android.os.IBinder.FIRST_CALL_TRANSACTION + %d)", index);
 
     Field* transactCode = new Field(STATIC | FINAL,
@@ -384,7 +384,7 @@ generate_method(const method_type* method, Class* interface,
     // == the proxy method ===================================================
     Method* proxy = new Method;
         proxy->comment = gather_comments(method->comments_token->extra);
-        proxy->modifiers = PUBLIC;
+        proxy->modifiers = PUBLIC | OVERRIDE;
         proxy->returnType = NAMES.Search(method->type.type.data);
         proxy->returnTypeDimension = method->type.dimension;
         proxy->name = method->name.data;
@@ -548,7 +548,8 @@ generate_binder_interface_class(const interface_type* iface)
     interface_item_type* item = iface->interface_items;
     while (item != NULL) {
         if (item->item_type == METHOD_TYPE) {
-            generate_method((method_type*)item, interface, stub, proxy, index);
+            method_type * method_item = (method_type*) item;
+            generate_method(method_item, interface, stub, proxy, method_item->assigned_id);
         }
         item = item->next;
         index++;

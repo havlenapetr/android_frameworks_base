@@ -203,10 +203,15 @@ public final class StrictMode {
      */
     public static final int DETECT_VM_REGISTRATION_LEAKS = 0x2000;  // for VmPolicy
 
+    /**
+     * @hide
+     */
+    private static final int DETECT_VM_FILE_URI_EXPOSURE = 0x4000;  // for VmPolicy
+
     private static final int ALL_VM_DETECT_BITS =
             DETECT_VM_CURSOR_LEAKS | DETECT_VM_CLOSABLE_LEAKS |
             DETECT_VM_ACTIVITY_LEAKS | DETECT_VM_INSTANCE_LEAKS |
-            DETECT_VM_REGISTRATION_LEAKS;
+            DETECT_VM_REGISTRATION_LEAKS | DETECT_VM_FILE_URI_EXPOSURE;
 
     /**
      * @hide
@@ -407,17 +412,17 @@ public final class StrictMode {
             }
 
             /**
-             * Enable detection of disk reads.
+             * Enable detection of slow calls.
              */
             public Builder detectCustomSlowCalls() {
                 return enable(DETECT_CUSTOM);
             }
 
             /**
-             * Enable detection of disk reads.
+             * Disable detection of slow calls.
              */
             public Builder permitCustomSlowCalls() {
-                return enable(DETECT_CUSTOM);
+                return disable(DETECT_CUSTOM);
             }
 
             /**
@@ -628,7 +633,8 @@ public final class StrictMode {
              */
             public Builder detectAll() {
                 return enable(DETECT_VM_ACTIVITY_LEAKS | DETECT_VM_CURSOR_LEAKS
-                        | DETECT_VM_CLOSABLE_LEAKS | DETECT_VM_REGISTRATION_LEAKS);
+                        | DETECT_VM_CLOSABLE_LEAKS | DETECT_VM_REGISTRATION_LEAKS
+                        | DETECT_VM_FILE_URI_EXPOSURE);
             }
 
             /**
@@ -663,6 +669,16 @@ public final class StrictMode {
              */
             public Builder detectLeakedRegistrationObjects() {
                 return enable(DETECT_VM_REGISTRATION_LEAKS);
+            }
+
+            /**
+             * Detect when a {@code file://} {@link android.net.Uri} is exposed beyond this
+             * app. The receiving app may not have access to the sent path.
+             * Instead, when sharing files between apps, {@code content://}
+             * should be used with permission grants.
+             */
+            public Builder detectFileUriExposure() {
+                return enable(DETECT_VM_FILE_URI_EXPOSURE);
             }
 
             /**
@@ -1524,6 +1540,13 @@ public final class StrictMode {
     /**
      * @hide
      */
+    public static boolean vmFileUriExposureEnabled() {
+        return (sVmPolicyMask & DETECT_VM_FILE_URI_EXPOSURE) != 0;
+    }
+
+    /**
+     * @hide
+     */
     public static void onSqliteObjectLeaked(String message, Throwable originStack) {
         onVmPolicyViolation(message, originStack);
     }
@@ -1547,6 +1570,14 @@ public final class StrictMode {
      */
     public static void onServiceConnectionLeaked(Throwable originStack) {
         onVmPolicyViolation(null, originStack);
+    }
+
+    /**
+     * @hide
+     */
+    public static void onFileUriExposed(String location) {
+        final String message = "file:// Uri exposed through " + location;
+        onVmPolicyViolation(message, new Throwable(message));
     }
 
     // Map from VM violation fingerprint to uptime millis.

@@ -69,8 +69,8 @@ void usage(void)
         "        [-F apk-file] [-J R-file-dir] \\\n"
         "        [--product product1,product2,...] \\\n"
         "        [-c CONFIGS] [--preferred-configurations CONFIGS] \\\n"
-        "        [-o] \\\n"
-        "        [raw-files-dir [raw-files-dir] ...]\n"
+        "        [raw-files-dir [raw-files-dir] ...] \\\n"
+        "        [--output-text-symbols DIR]\n"
         "\n"
         "   Package the android resources.  It will read assets and resources that are\n"
         "   supplied with the -M -A -S or raw-files-dir arguments.  The -J -P -F and -R\n"
@@ -85,7 +85,11 @@ void usage(void)
         "   Add specified files to Zip-compatible archive.\n\n", gProgName);
     fprintf(stderr,
         " %s c[runch] [-v] -S resource-sources ... -C output-folder ...\n"
-        "   Do PNG preprocessing and store the results in output folder.\n\n", gProgName);
+        "   Do PNG preprocessing on one or several resource folders\n"
+        "   and store the results in the output folder.\n\n", gProgName);
+    fprintf(stderr,
+        " %s s[ingleCrunch] [-v] -i input-file -o outputfile\n"
+        "   Do PNG preprocessing on a single file.\n\n", gProgName);
     fprintf(stderr,
         " %s v[ersion]\n"
         "   Print program version.\n\n", gProgName);
@@ -110,7 +114,6 @@ void usage(void)
         "   -j  specify a jar or zip file containing classes to include\n"
         "   -k  junk path of file(s) added\n"
         "   -m  make package directories under location specified by -J\n"
-        "   -o  create overlay package (ie only resources; expects <overlay-package> in manifest)\n"
 #if 0
         "   -p  pseudolocalize the default configuration\n"
 #endif
@@ -179,6 +182,14 @@ void usage(void)
         "       Make the resources ID non constant. This is required to make an R java class\n"
         "       that does not contain the final value but is used to make reusable compiled\n"
         "       libraries that need to access resources.\n"
+        "   --error-on-failed-insert\n"
+        "       Forces aapt to return an error if it fails to insert values into the manifest\n"
+        "       with --debug-mode, --min-sdk-version, --target-sdk-version --version-code\n"
+        "       and --version-name.\n"
+        "       Insertion typically fails if the manifest already defines the attribute.\n"
+        "   --output-text-symbols\n"
+        "       Generates a text file containing the resource symbols of the R class in the\n"
+        "       specified folder.\n"
         "   --ignore-assets\n"
         "       Assets to be ignored. Default pattern is:\n"
         "       %s\n",
@@ -196,13 +207,14 @@ int handleCommand(Bundle* bundle)
     //    printf("  %d: '%s'\n", i, bundle->getFileSpecEntry(i));
 
     switch (bundle->getCommand()) {
-    case kCommandVersion:   return doVersion(bundle);
-    case kCommandList:      return doList(bundle);
-    case kCommandDump:      return doDump(bundle);
-    case kCommandAdd:       return doAdd(bundle);
-    case kCommandRemove:    return doRemove(bundle);
-    case kCommandPackage:   return doPackage(bundle);
-    case kCommandCrunch:    return doCrunch(bundle);
+    case kCommandVersion:      return doVersion(bundle);
+    case kCommandList:         return doList(bundle);
+    case kCommandDump:         return doDump(bundle);
+    case kCommandAdd:          return doAdd(bundle);
+    case kCommandRemove:       return doRemove(bundle);
+    case kCommandPackage:      return doPackage(bundle);
+    case kCommandCrunch:       return doCrunch(bundle);
+    case kCommandSingleCrunch: return doSingleCrunch(bundle);
     default:
         fprintf(stderr, "%s: requested command not yet supported\n", gProgName);
         return 1;
@@ -242,6 +254,8 @@ int main(int argc, char* const argv[])
         bundle.setCommand(kCommandPackage);
     else if (argv[1][0] == 'c')
         bundle.setCommand(kCommandCrunch);
+    else if (argv[1][0] == 's')
+        bundle.setCommand(kCommandSingleCrunch);
     else {
         fprintf(stderr, "ERROR: Unknown command '%s'\n", argv[1]);
         wantUsage = true;
@@ -295,9 +309,6 @@ int main(int argc, char* const argv[])
                 break;
             case 'm':
                 bundle.setMakePackageDirs(true);
-                break;
-            case 'o':
-                bundle.setIsOverlayPackage(true);
                 break;
 #if 0
             case 'p':
@@ -423,6 +434,28 @@ int main(int argc, char* const argv[])
                 convertPath(argv[0]);
                 bundle.setCrunchedOutputDir(argv[0]);
                 break;
+            case 'i':
+                argc--;
+                argv++;
+                if (!argc) {
+                    fprintf(stderr, "ERROR: No argument supplied for '-i' option\n");
+                    wantUsage = true;
+                    goto bail;
+                }
+                convertPath(argv[0]);
+                bundle.setSingleCrunchInputFile(argv[0]);
+                break;
+            case 'o':
+                argc--;
+                argv++;
+                if (!argc) {
+                    fprintf(stderr, "ERROR: No argument supplied for '-o' option\n");
+                    wantUsage = true;
+                    goto bail;
+                }
+                convertPath(argv[0]);
+                bundle.setSingleCrunchOutputFile(argv[0]);
+                break;
             case '0':
                 argc--;
                 argv++;
@@ -547,6 +580,17 @@ int main(int argc, char* const argv[])
                     bundle.setInstrumentationPackageNameOverride(argv[0]);
                 } else if (strcmp(cp, "-auto-add-overlay") == 0) {
                     bundle.setAutoAddOverlay(true);
+                } else if (strcmp(cp, "-error-on-failed-insert") == 0) {
+                    bundle.setErrorOnFailedInsert(true);
+                } else if (strcmp(cp, "-output-text-symbols") == 0) {
+                    argc--;
+                    argv++;
+                    if (!argc) {
+                        fprintf(stderr, "ERROR: No argument supplied for '-output-text-symbols' option\n");
+                        wantUsage = true;
+                        goto bail;
+                    }
+                    bundle.setOutputTextSymbols(argv[0]);
                 } else if (strcmp(cp, "-product") == 0) {
                     argc--;
                     argv++;

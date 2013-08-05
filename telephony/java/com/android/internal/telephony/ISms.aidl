@@ -39,7 +39,7 @@ interface ISms {
      *
      * @return list of SmsRawData of all sms on ICC
      */
-     List<SmsRawData> getAllMessagesFromIccEf();
+     List<SmsRawData> getAllMessagesFromIccEf(String callingPkg);
 
     /**
      * Update the specified message on the ICC.
@@ -52,7 +52,7 @@ interface ISms {
      * @return success or not
      *
      */
-     boolean updateMessageOnIccEf(int messageIndex, int newStatus,
+     boolean updateMessageOnIccEf(String callingPkg, int messageIndex, int newStatus,
             in byte[] pdu);
 
     /**
@@ -64,7 +64,7 @@ interface ISms {
      * @return success or not
      *
      */
-    boolean copyMessageToIccEf(int status, in byte[] pdu, in byte[] smsc);
+    boolean copyMessageToIccEf(String callingPkg, int status, in byte[] pdu, in byte[] smsc);
 
     /**
      * Send a data SMS.
@@ -89,7 +89,7 @@ interface ISms {
      *  broadcast when the message is delivered to the recipient.  The
      *  raw pdu of the status report is in the extended data ("pdu").
      */
-    void sendData(in String destAddr, in String scAddr, in int destPort,
+    void sendData(String callingPkg, in String destAddr, in String scAddr, in int destPort,
             in byte[] data, in PendingIntent sentIntent, in PendingIntent deliveryIntent);
 
     /**
@@ -115,7 +115,7 @@ interface ISms {
      *  broadcast when the message is delivered to the recipient.  The
      *  raw pdu of the status report is in the extended data ("pdu").
      */
-    void sendText(in String destAddr, in String scAddr, in String text,
+    void sendText(String callingPkg, in String destAddr, in String scAddr, in String text,
             in PendingIntent sentIntent, in PendingIntent deliveryIntent);
 
     /**
@@ -140,7 +140,7 @@ interface ISms {
      *   to the recipient.  The raw pdu of the status report is in the
      *   extended data ("pdu").
      */
-    void sendMultipartText(in String destinationAddress, in String scAddress,
+    void sendMultipartText(String callingPkg, in String destinationAddress, in String scAddress,
             in List<String> parts, in List<PendingIntent> sentIntents,
             in List<PendingIntent> deliveryIntents);
 
@@ -150,7 +150,8 @@ interface ISms {
      * message identifier, they must both disable it for the device to stop
      * receiving those messages.
      *
-     * @param messageIdentifier Message identifier as specified in TS 23.041
+     * @param messageIdentifier Message identifier as specified in TS 23.041 (3GPP) or
+     *   C.R1001-G (3GPP2)
      * @return true if successful, false otherwise
      *
      * @see #disableCellBroadcast(int)
@@ -163,21 +164,24 @@ interface ISms {
      * message identifier, they must both disable it for the device to stop
      * receiving those messages.
      *
-     * @param messageIdentifier Message identifier as specified in TS 23.041
+     * @param messageIdentifier Message identifier as specified in TS 23.041 (3GPP) or
+     *   C.R1001-G (3GPP2)
      * @return true if successful, false otherwise
      *
      * @see #enableCellBroadcast(int)
      */
     boolean disableCellBroadcast(int messageIdentifier);
 
-    /**
+    /*
      * Enable reception of cell broadcast (SMS-CB) messages with the given
      * message identifier range. Note that if two different clients enable
      * a message identifier range, they must both disable it for the device
      * to stop receiving those messages.
      *
-     * @param startMessageId first message identifier as specified in TS 23.041
-     * @param endMessageId last message identifier as specified in TS 23.041
+     * @param startMessageId first message identifier as specified in TS 23.041 (3GPP) or
+     *   C.R1001-G (3GPP2)
+     * @param endMessageId last message identifier as specified in TS 23.041 (3GPP) or
+     *   C.R1001-G (3GPP2)
      * @return true if successful, false otherwise
      *
      * @see #disableCellBroadcastRange(int, int)
@@ -190,12 +194,25 @@ interface ISms {
      * a message identifier range, they must both disable it for the device
      * to stop receiving those messages.
      *
-     * @param startMessageId first message identifier as specified in TS 23.041
-     * @param endMessageId last message identifier as specified in TS 23.041
+     * @param startMessageId first message identifier as specified in TS 23.041 (3GPP) or
+     *   C.R1001-G (3GPP2)
+     * @param endMessageId last message identifier as specified in TS 23.041 (3GPP) or
+     *   C.R1001-G (3GPP2)
      * @return true if successful, false otherwise
      *
      * @see #enableCellBroadcastRange(int, int)
      */
     boolean disableCellBroadcastRange(int startMessageId, int endMessageId);
 
+    /**
+     * Returns the premium SMS send permission for the specified package.
+     * Requires system permission.
+     */
+    int getPremiumSmsPermission(String packageName);
+
+    /**
+     * Set the SMS send permission for the specified package.
+     * Requires system permission.
+     */
+    void setPremiumSmsPermission(String packageName, int permission);
 }

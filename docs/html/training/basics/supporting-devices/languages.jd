@@ -1,5 +1,6 @@
 page.title=Supporting Different Languages
 parent.title=Supporting Different Devices
+page.tags="localizing","localization","resources", "formats", "l10n"
 parent.link=index.html
 
 trainingnavtop=true
@@ -18,7 +19,8 @@ next.link=screens.html
     </ol>
     <h2>You should also read</h2>
     <ul>
-      <li><a href="{@docRoot}guide/topics/resources/localization.html">Localization</a></li>
+    <li><a href="{@docRoot}distribute/googleplay/publish/localizing.html">Localization Checklist</a></li>
+      <li><a href="{@docRoot}guide/topics/resources/localization.html">Localization with Resources</a></li>
     </ul>
   </div>
 </div>
@@ -92,8 +94,8 @@ locale currently set for the user's device.</p>
 <pre>
 &lt;?xml version="1.0" encoding="utf-8"?>
 &lt;resources>
-    &lt;string name="title">Ma Application&lt;/string>
-    &lt;string name="hello_world">Bonjour tout le Monde!&lt;/string>
+    &lt;string name="title">Mon Application&lt;/string>
+    &lt;string name="hello_world">Bonjour le monde !&lt;/string>
 &lt;/resources>
 </pre>
 

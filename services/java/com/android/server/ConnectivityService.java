@@ -17,34 +17,52 @@
 package com.android.server;
 
 import static android.Manifest.permission.MANAGE_NETWORK_POLICY;
+import static android.Manifest.permission.RECEIVE_DATA_ACTIVITY_CHANGE;
 import static android.net.ConnectivityManager.CONNECTIVITY_ACTION;
 import static android.net.ConnectivityManager.CONNECTIVITY_ACTION_IMMEDIATE;
+import static android.net.ConnectivityManager.TYPE_BLUETOOTH;
+import static android.net.ConnectivityManager.TYPE_DUMMY;
+import static android.net.ConnectivityManager.TYPE_ETHERNET;
+import static android.net.ConnectivityManager.TYPE_MOBILE;
+import static android.net.ConnectivityManager.TYPE_WIFI;
+import static android.net.ConnectivityManager.TYPE_WIMAX;
+import static android.net.ConnectivityManager.getNetworkTypeName;
 import static android.net.ConnectivityManager.isNetworkTypeValid;
 import static android.net.NetworkPolicyManager.RULE_ALLOW_ALL;
 import static android.net.NetworkPolicyManager.RULE_REJECT_METERED;
 
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.bluetooth.BluetoothTetheringDataTracker;
+import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.database.ContentObserver;
+import android.net.CaptivePortalTracker;
 import android.net.ConnectivityManager;
 import android.net.DummyDataStateTracker;
 import android.net.EthernetDataTracker;
 import android.net.IConnectivityManager;
+import android.net.INetworkManagementEventObserver;
 import android.net.INetworkPolicyListener;
 import android.net.INetworkPolicyManager;
 import android.net.INetworkStatsService;
 import android.net.LinkAddress;
 import android.net.LinkProperties;
+import android.net.Uri;
 import android.net.LinkProperties.CompareResult;
 import android.net.MobileDataStateTracker;
 import android.net.NetworkConfig;
 import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
+import android.net.NetworkInfo.State;
 import android.net.NetworkQuotaInfo;
 import android.net.NetworkState;
 import android.net.NetworkStateTracker;
@@ -54,6 +72,7 @@ import android.net.ProxyProperties;
 import android.net.RouteInfo;
 import android.net.wifi.WifiStateTracker;
 import android.net.wimax.WimaxManagerConstants;
+import android.os.AsyncTask;
 import android.os.Binder;
 import android.os.FileUtils;
 import android.os.Handler;
@@ -62,37 +81,60 @@ import android.os.IBinder;
 import android.os.INetworkManagementService;
 import android.os.Looper;
 import android.os.Message;
+import android.os.Messenger;
 import android.os.ParcelFileDescriptor;
 import android.os.PowerManager;
+import android.os.Process;
 import android.os.RemoteException;
+import android.os.ResultReceiver;
 import android.os.ServiceManager;
 import android.os.SystemClock;
 import android.os.SystemProperties;
+import android.os.UserHandle;
 import android.provider.Settings;
+import android.security.Credentials;
+import android.security.KeyStore;
+import android.telephony.TelephonyManager;
 import android.text.TextUtils;
-import android.util.EventLog;
 import android.util.Slog;
 import android.util.SparseIntArray;
+import android.util.Xml;
 
+import com.android.internal.R;
 import com.android.internal.net.LegacyVpnInfo;
 import com.android.internal.net.VpnConfig;
+import com.android.internal.net.VpnProfile;
+import com.android.internal.telephony.DctConstants;
 import com.android.internal.telephony.Phone;
+import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.util.IndentingPrintWriter;
+import com.android.internal.util.XmlUtils;
 import com.android.server.am.BatteryStatsService;
+import com.android.server.connectivity.Nat464Xlat;
 import com.android.server.connectivity.Tethering;
 import com.android.server.connectivity.Vpn;
+import com.android.server.net.BaseNetworkObserver;
+import com.android.server.net.LockdownVpnTracker;
 import com.google.android.collect.Lists;
 import com.google.android.collect.Sets;
+
 import dalvik.system.DexClassLoader;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+
+import java.io.File;
 import java.io.FileDescriptor;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.lang.reflect.InvocationTargetException;
+import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.net.URL;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -100,23 +142,33 @@ import java.util.Collection;
 import java.util.GregorianCalendar;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * @hide
  */
 public class ConnectivityService extends IConnectivityManager.Stub {
+    private static final String TAG = "ConnectivityService";
 
     private static final boolean DBG = true;
     private static final boolean VDBG = false;
-    private static final String TAG = "ConnectivityService";
 
     private static final boolean LOGD_RULES = false;
+
+    // TODO: create better separation between radio types and network types
 
     // how long to wait before switching back to a radio's default network
     private static final int RESTORE_DEFAULT_NETWORK_DELAY = 1 * 60 * 1000;
     // system property that can override the above value
     private static final String NETWORK_RESTORE_DELAY_PROP_NAME =
             "android.telephony.apn-restore";
+
+    // Default value if FAIL_FAST_TIME_MS is not set
+    private static final int DEFAULT_FAIL_FAST_TIME_MS = 1 * 60 * 1000;
+    // system property that can override DEFAULT_FAIL_FAST_TIME_MS
+    private static final String FAIL_FAST_TIME_MS =
+            "persist.radio.fail_fast_time_ms";
 
     // used in recursive route setting to add gateways for the host for which
     // a host route was requested.
@@ -125,7 +177,15 @@ public class ConnectivityService extends IConnectivityManager.Stub {
     private Tethering mTethering;
     private boolean mTetheringConfigValid = false;
 
+    private KeyStore mKeyStore;
+
     private Vpn mVpn;
+    private VpnCallback mVpnCallback = new VpnCallback();
+
+    private boolean mLockdownEnabled;
+    private LockdownVpnTracker mLockdownTracker;
+
+    private Nat464Xlat mClat;
 
     /** Lock around {@link #mUidRules} and {@link #mMeteredIfaces}. */
     private Object mRulesLock = new Object();
@@ -141,6 +201,9 @@ public class ConnectivityService extends IConnectivityManager.Stub {
      */
     private NetworkStateTracker mNetTrackers[];
 
+    /* Handles captive portal check on a network */
+    private CaptivePortalTracker mCaptivePortalTracker;
+
     /**
      * The link properties that define the current links
      */
@@ -150,7 +213,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
      * A per Net list of the PID's that requested access to the net
      * used both as a refcount and for per-PID DNS selection
      */
-    private List mNetRequestersPids[];
+    private List<Integer> mNetRequestersPids[];
 
     // priority order of the nettrackers
     // (excluding dynamically set mNetworkPreference)
@@ -185,95 +248,88 @@ public class ConnectivityService extends IConnectivityManager.Stub {
     private static final boolean TO_DEFAULT_TABLE = true;
     private static final boolean TO_SECONDARY_TABLE = false;
 
-    // Share the event space with NetworkStateTracker (which can't see this
-    // internal class but sends us events).  If you change these, change
-    // NetworkStateTracker.java too.
-    private static final int MIN_NETWORK_STATE_TRACKER_EVENT = 1;
-    private static final int MAX_NETWORK_STATE_TRACKER_EVENT = 100;
-
     /**
      * used internally as a delayed event to make us switch back to the
      * default network
      */
-    private static final int EVENT_RESTORE_DEFAULT_NETWORK =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 1;
+    private static final int EVENT_RESTORE_DEFAULT_NETWORK = 1;
 
     /**
      * used internally to change our mobile data enabled flag
      */
-    private static final int EVENT_CHANGE_MOBILE_DATA_ENABLED =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 2;
+    private static final int EVENT_CHANGE_MOBILE_DATA_ENABLED = 2;
 
     /**
      * used internally to change our network preference setting
      * arg1 = networkType to prefer
      */
-    private static final int EVENT_SET_NETWORK_PREFERENCE =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 3;
+    private static final int EVENT_SET_NETWORK_PREFERENCE = 3;
 
     /**
      * used internally to synchronize inet condition reports
      * arg1 = networkType
      * arg2 = condition (0 bad, 100 good)
      */
-    private static final int EVENT_INET_CONDITION_CHANGE =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 4;
+    private static final int EVENT_INET_CONDITION_CHANGE = 4;
 
     /**
      * used internally to mark the end of inet condition hold periods
      * arg1 = networkType
      */
-    private static final int EVENT_INET_CONDITION_HOLD_END =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 5;
+    private static final int EVENT_INET_CONDITION_HOLD_END = 5;
 
     /**
      * used internally to set enable/disable cellular data
      * arg1 = ENBALED or DISABLED
      */
-    private static final int EVENT_SET_MOBILE_DATA =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 7;
+    private static final int EVENT_SET_MOBILE_DATA = 7;
 
     /**
      * used internally to clear a wakelock when transitioning
      * from one net to another
      */
-    private static final int EVENT_CLEAR_NET_TRANSITION_WAKELOCK =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 8;
+    private static final int EVENT_CLEAR_NET_TRANSITION_WAKELOCK = 8;
 
     /**
      * used internally to reload global proxy settings
      */
-    private static final int EVENT_APPLY_GLOBAL_HTTP_PROXY =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 9;
+    private static final int EVENT_APPLY_GLOBAL_HTTP_PROXY = 9;
 
     /**
      * used internally to set external dependency met/unmet
      * arg1 = ENABLED (met) or DISABLED (unmet)
      * arg2 = NetworkType
      */
-    private static final int EVENT_SET_DEPENDENCY_MET =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 10;
+    private static final int EVENT_SET_DEPENDENCY_MET = 10;
 
     /**
      * used internally to restore DNS properties back to the
      * default network
      */
-    private static final int EVENT_RESTORE_DNS =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 11;
+    private static final int EVENT_RESTORE_DNS = 11;
 
     /**
      * used internally to send a sticky broadcast delayed.
      */
-    private static final int EVENT_SEND_STICKY_BROADCAST_INTENT =
-            MAX_NETWORK_STATE_TRACKER_EVENT + 12;
+    private static final int EVENT_SEND_STICKY_BROADCAST_INTENT = 12;
 
     /**
      * Used internally to
      * {@link NetworkStateTracker#setPolicyDataEnable(boolean)}.
      */
-    private static final int EVENT_SET_POLICY_DATA_ENABLE = MAX_NETWORK_STATE_TRACKER_EVENT + 13;
+    private static final int EVENT_SET_POLICY_DATA_ENABLE = 13;
 
-    private Handler mHandler;
+    private static final int EVENT_VPN_STATE_CHANGED = 14;
+
+    /**
+     * Used internally to disable fail fast of mobile data
+     */
+    private static final int EVENT_ENABLE_FAIL_FAST_MOBILE_DATA = 15;
+
+    /** Handler used for internal events. */
+    private InternalHandler mHandler;
+    /** Handler used for incoming {@link NetworkStateTracker} events. */
+    private NetworkStateTrackerHandler mTrackerHandler;
 
     // list of DeathRecipients used to make sure features are turned off when
     // a process dies
@@ -299,12 +355,11 @@ public class ConnectivityService extends IConnectivityManager.Stub {
 
     // track the current default http proxy - tell the world if we get a new one (real change)
     private ProxyProperties mDefaultProxy = null;
-    private Object mDefaultProxyLock = new Object();
+    private Object mProxyLock = new Object();
     private boolean mDefaultProxyDisabled = false;
 
     // track the global proxy.
     private ProxyProperties mGlobalProxy = null;
-    private final Object mGlobalProxyLock = new Object();
 
     private SettingsObserver mSettingsObserver;
 
@@ -325,13 +380,33 @@ public class ConnectivityService extends IConnectivityManager.Stub {
     // the set of network types that can only be enabled by system/sig apps
     List mProtectedNetworks;
 
+    private AtomicInteger mEnableFailFastMobileDataTag = new AtomicInteger(0);
+
+    TelephonyManager mTelephonyManager;
+
+    // We only want one checkMobileProvisioning after booting.
+    volatile boolean mFirstProvisioningCheckStarted = false;
+
     public ConnectivityService(Context context, INetworkManagementService netd,
             INetworkStatsService statsService, INetworkPolicyManager policyManager) {
+        // Currently, omitting a NetworkFactory will create one internally
+        // TODO: create here when we have cleaner WiMAX support
+        this(context, netd, statsService, policyManager, null);
+    }
+
+    public ConnectivityService(Context context, INetworkManagementService netManager,
+            INetworkStatsService statsService, INetworkPolicyManager policyManager,
+            NetworkFactory netFactory) {
         if (DBG) log("ConnectivityService starting up");
 
         HandlerThread handlerThread = new HandlerThread("ConnectivityServiceThread");
         handlerThread.start();
-        mHandler = new MyHandler(handlerThread.getLooper());
+        mHandler = new InternalHandler(handlerThread.getLooper());
+        mTrackerHandler = new NetworkStateTrackerHandler(handlerThread.getLooper());
+
+        if (netFactory == null) {
+            netFactory = new DefaultNetworkFactory(context, mTrackerHandler);
+        }
 
         // setup our unique device name
         if (TextUtils.isEmpty(SystemProperties.get("net.hostname"))) {
@@ -344,8 +419,8 @@ public class ConnectivityService extends IConnectivityManager.Stub {
         }
 
         // read our default dns server ip
-        String dns = Settings.Secure.getString(context.getContentResolver(),
-                Settings.Secure.DEFAULT_DNS_SERVER);
+        String dns = Settings.Global.getString(context.getContentResolver(),
+                Settings.Global.DEFAULT_DNS_SERVER);
         if (dns == null || dns.length() == 0) {
             dns = context.getResources().getString(
                     com.android.internal.R.string.config_default_dns_server);
@@ -357,8 +432,10 @@ public class ConnectivityService extends IConnectivityManager.Stub {
         }
 
         mContext = checkNotNull(context, "missing Context");
-        mNetd = checkNotNull(netd, "missing INetworkManagementService");
+        mNetd = checkNotNull(netManager, "missing INetworkManagementService");
         mPolicyManager = checkNotNull(policyManager, "missing INetworkPolicyManager");
+        mKeyStore = KeyStore.getInstance();
+        mTelephonyManager = (TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
 
         try {
             mPolicyManager.registerListener(mPolicyListener);
@@ -376,8 +453,6 @@ public class ConnectivityService extends IConnectivityManager.Stub {
         mNetTrackers = new NetworkStateTracker[
                 ConnectivityManager.MAX_NETWORK_TYPE+1];
         mCurrentLinkProperties = new LinkProperties[ConnectivityManager.MAX_NETWORK_TYPE+1];
-
-        mNetworkPreference = getPersistedNetworkPreference();
 
         mRadioAttributes = new RadioAttributes[ConnectivityManager.MAX_RADIO_TYPE+1];
         mNetConfigs = new NetworkConfig[ConnectivityManager.MAX_NETWORK_TYPE+1];
@@ -399,6 +474,9 @@ public class ConnectivityService extends IConnectivityManager.Stub {
             mRadioAttributes[r.mType] = r;
         }
 
+        // TODO: What is the "correct" way to do determine if this is a wifi only device?
+        boolean wifiOnly = SystemProperties.getBoolean("ro.radio.noril", false);
+        log("wifiOnly=" + wifiOnly);
         String[] naStrings = context.getResources().getStringArray(
                 com.android.internal.R.array.networkAttributes);
         for (String naString : naStrings) {
@@ -406,6 +484,11 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                 NetworkConfig n = new NetworkConfig(naString);
                 if (n.type > ConnectivityManager.MAX_NETWORK_TYPE) {
                     loge("Error in networkAttributes - ignoring attempt to define type " +
+                            n.type);
+                    continue;
+                }
+                if (wifiOnly && ConnectivityManager.isNetworkTypeMobile(n.type)) {
+                    log("networkAttributes - ignoring mobile as this dev is wifiOnly " +
                             n.type);
                     continue;
                 }
@@ -460,80 +543,66 @@ public class ConnectivityService extends IConnectivityManager.Stub {
             }
         }
 
-        mNetRequestersPids = new ArrayList[ConnectivityManager.MAX_NETWORK_TYPE+1];
+        // Update mNetworkPreference according to user mannually first then overlay config.xml
+        mNetworkPreference = getPersistedNetworkPreference();
+        if (mNetworkPreference == -1) {
+            for (int n : mPriorityList) {
+                if (mNetConfigs[n].isDefault() && ConnectivityManager.isNetworkTypeValid(n)) {
+                    mNetworkPreference = n;
+                    break;
+                }
+            }
+            if (mNetworkPreference == -1) {
+                throw new IllegalStateException(
+                        "You should set at least one default Network in config.xml!");
+            }
+        }
+
+        mNetRequestersPids =
+                (List<Integer> [])new ArrayList[ConnectivityManager.MAX_NETWORK_TYPE+1];
         for (int i : mPriorityList) {
-            mNetRequestersPids[i] = new ArrayList();
+            mNetRequestersPids[i] = new ArrayList<Integer>();
         }
 
         mFeatureUsers = new ArrayList<FeatureUser>();
 
-        mNumDnsEntries = 0;
-
         mTestMode = SystemProperties.get("cm.test.mode").equals("true")
                 && SystemProperties.get("ro.build.type").equals("eng");
-        /*
-         * Create the network state trackers for Wi-Fi and mobile
-         * data. Maybe this could be done with a factory class,
-         * but it's not clear that it's worth it, given that
-         * the number of different network types is not going
-         * to change very often.
-         */
-        for (int netType : mPriorityList) {
-            switch (mNetConfigs[netType].radio) {
-            case ConnectivityManager.TYPE_WIFI:
-                mNetTrackers[netType] = new WifiStateTracker(netType,
-                        mNetConfigs[netType].name);
-                mNetTrackers[netType].startMonitoring(context, mHandler);
-               break;
-            case ConnectivityManager.TYPE_MOBILE:
-                mNetTrackers[netType] = new MobileDataStateTracker(netType,
-                        mNetConfigs[netType].name);
-                mNetTrackers[netType].startMonitoring(context, mHandler);
-                break;
-            case ConnectivityManager.TYPE_DUMMY:
-                mNetTrackers[netType] = new DummyDataStateTracker(netType,
-                        mNetConfigs[netType].name);
-                mNetTrackers[netType].startMonitoring(context, mHandler);
-                break;
-            case ConnectivityManager.TYPE_BLUETOOTH:
-                mNetTrackers[netType] = BluetoothTetheringDataTracker.getInstance();
-                mNetTrackers[netType].startMonitoring(context, mHandler);
-                break;
-            case ConnectivityManager.TYPE_WIMAX:
-                mNetTrackers[netType] = makeWimaxStateTracker();
-                if (mNetTrackers[netType]!= null) {
-                    mNetTrackers[netType].startMonitoring(context, mHandler);
-                }
-                break;
-            case ConnectivityManager.TYPE_ETHERNET:
-                mNetTrackers[netType] = EthernetDataTracker.getInstance();
-                mNetTrackers[netType].startMonitoring(context, mHandler);
-                break;
-            default:
-                loge("Trying to create a DataStateTracker for an unknown radio type " +
-                        mNetConfigs[netType].radio);
+
+        // Create and start trackers for hard-coded networks
+        for (int targetNetworkType : mPriorityList) {
+            final NetworkConfig config = mNetConfigs[targetNetworkType];
+            final NetworkStateTracker tracker;
+            try {
+                tracker = netFactory.createTracker(targetNetworkType, config);
+                mNetTrackers[targetNetworkType] = tracker;
+            } catch (IllegalArgumentException e) {
+                Slog.e(TAG, "Problem creating " + getNetworkTypeName(targetNetworkType)
+                        + " tracker: " + e);
                 continue;
             }
-            mCurrentLinkProperties[netType] = null;
-            if (mNetTrackers[netType] != null && mNetConfigs[netType].isDefault()) {
-                mNetTrackers[netType].reconnect();
+
+            tracker.startMonitoring(context, mTrackerHandler);
+            if (config.isDefault()) {
+                tracker.reconnect();
             }
         }
 
-        IBinder b = ServiceManager.getService(Context.NETWORKMANAGEMENT_SERVICE);
-        INetworkManagementService nmService = INetworkManagementService.Stub.asInterface(b);
-
-        mTethering = new Tethering(mContext, nmService, statsService, this, mHandler.getLooper());
+        mTethering = new Tethering(mContext, mNetd, statsService, this, mHandler.getLooper());
         mTetheringConfigValid = ((mTethering.getTetherableUsbRegexs().length != 0 ||
                                   mTethering.getTetherableWifiRegexs().length != 0 ||
                                   mTethering.getTetherableBluetoothRegexs().length != 0) &&
                                  mTethering.getUpstreamIfaceTypes().length != 0);
 
-        mVpn = new Vpn(mContext, new VpnCallback());
+        mVpn = new Vpn(mContext, mVpnCallback, mNetd, this);
+        mVpn.startMonitoring(mContext, mTrackerHandler);
+
+        mClat = new Nat464Xlat(mContext, mNetd, this, mTrackerHandler);
 
         try {
-            nmService.registerObserver(mTethering);
-            nmService.registerObserver(mVpn);
+            mNetd.registerObserver(mTethering);
+            mNetd.registerObserver(mDataActivityObserver);
+            mNetd.registerObserver(mClat);
         } catch (RemoteException e) {
             loge("Error registering observer :" + e);
         }
@@ -545,10 +614,58 @@ public class ConnectivityService extends IConnectivityManager.Stub {
         mSettingsObserver = new SettingsObserver(mHandler, EVENT_APPLY_GLOBAL_HTTP_PROXY);
         mSettingsObserver.observe(mContext);
 
+        mCaptivePortalTracker = CaptivePortalTracker.makeCaptivePortalTracker(mContext, this);
         loadGlobalProxy();
     }
-private NetworkStateTracker makeWimaxStateTracker() {
-        //Initialize Wimax
+
+    /**
+     * Factory that creates {@link NetworkStateTracker} instances using given
+     * {@link NetworkConfig}.
+     */
+    public interface NetworkFactory {
+        public NetworkStateTracker createTracker(int targetNetworkType, NetworkConfig config);
+    }
+
+    private static class DefaultNetworkFactory implements NetworkFactory {
+        private final Context mContext;
+        private final Handler mTrackerHandler;
+
+        public DefaultNetworkFactory(Context context, Handler trackerHandler) {
+            mContext = context;
+            mTrackerHandler = trackerHandler;
+        }
+
+        @Override
+        public NetworkStateTracker createTracker(int targetNetworkType, NetworkConfig config) {
+            switch (config.radio) {
+                case TYPE_WIFI:
+                    return new WifiStateTracker(targetNetworkType, config.name);
+                case TYPE_MOBILE:
+                    return new MobileDataStateTracker(targetNetworkType, config.name);
+                case TYPE_DUMMY:
+                    return new DummyDataStateTracker(targetNetworkType, config.name);
+                case TYPE_BLUETOOTH:
+                    return BluetoothTetheringDataTracker.getInstance();
+                case TYPE_WIMAX:
+                    return makeWimaxStateTracker(mContext, mTrackerHandler);
+                case TYPE_ETHERNET:
+                    return EthernetDataTracker.getInstance();
+                default:
+                    throw new IllegalArgumentException(
+                            "Trying to create a NetworkStateTracker for an unknown radio type: "
+                            + config.radio);
+            }
+        }
+    }
+
+    /**
+     * Loads external WiMAX library and registers as system service, returning a
+     * {@link NetworkStateTracker} for WiMAX. Caller is still responsible for
+     * invoking {@link NetworkStateTracker#startMonitoring(Context, Handler)}.
+     */
+    private static NetworkStateTracker makeWimaxStateTracker(
+            Context context, Handler trackerHandler) {
+        // Initialize Wimax
         DexClassLoader wimaxClassLoader;
         Class wimaxStateTrackerClass = null;
         Class wimaxServiceClass = null;
@@ -561,25 +678,25 @@ private NetworkStateTracker makeWimaxStateTracker() {
 
         NetworkStateTracker wimaxStateTracker = null;
 
-        boolean isWimaxEnabled = mContext.getResources().getBoolean(
+        boolean isWimaxEnabled = context.getResources().getBoolean(
                 com.android.internal.R.bool.config_wimaxEnabled);
 
         if (isWimaxEnabled) {
             try {
-                wimaxJarLocation = mContext.getResources().getString(
+                wimaxJarLocation = context.getResources().getString(
                         com.android.internal.R.string.config_wimaxServiceJarLocation);
-                wimaxLibLocation = mContext.getResources().getString(
+                wimaxLibLocation = context.getResources().getString(
                         com.android.internal.R.string.config_wimaxNativeLibLocation);
-                wimaxManagerClassName = mContext.getResources().getString(
+                wimaxManagerClassName = context.getResources().getString(
                         com.android.internal.R.string.config_wimaxManagerClassname);
-                wimaxServiceClassName = mContext.getResources().getString(
+                wimaxServiceClassName = context.getResources().getString(
                         com.android.internal.R.string.config_wimaxServiceClassname);
-                wimaxStateTrackerClassName = mContext.getResources().getString(
+                wimaxStateTrackerClassName = context.getResources().getString(
                         com.android.internal.R.string.config_wimaxStateTrackerClassname);
 
-                log("wimaxJarLocation: " + wimaxJarLocation);
+                if (DBG) log("wimaxJarLocation: " + wimaxJarLocation);
                 wimaxClassLoader =  new DexClassLoader(wimaxJarLocation,
-                        new ContextWrapper(mContext).getCacheDir().getAbsolutePath(),
+                        new ContextWrapper(context).getCacheDir().getAbsolutePath(),
                         wimaxLibLocation, ClassLoader.getSystemClassLoader());
 
                 try {
@@ -596,17 +713,17 @@ private NetworkStateTracker makeWimaxStateTracker() {
             }
 
             try {
-                log("Starting Wimax Service... ");
+                if (DBG) log("Starting Wimax Service... ");
 
                 Constructor wmxStTrkrConst = wimaxStateTrackerClass.getConstructor
                         (new Class[] {Context.class, Handler.class});
-                wimaxStateTracker = (NetworkStateTracker)wmxStTrkrConst.newInstance(mContext,
-                        mHandler);
+                wimaxStateTracker = (NetworkStateTracker) wmxStTrkrConst.newInstance(
+                        context, trackerHandler);
 
                 Constructor wmxSrvConst = wimaxServiceClass.getDeclaredConstructor
                         (new Class[] {Context.class, wimaxStateTrackerClass});
                 wmxSrvConst.setAccessible(true);
-                IBinder svcInvoker = (IBinder)wmxSrvConst.newInstance(mContext, wimaxStateTracker);
+                IBinder svcInvoker = (IBinder)wmxSrvConst.newInstance(context, wimaxStateTracker);
                 wmxSrvConst.setAccessible(false);
 
                 ServiceManager.addService(WimaxManagerConstants.WIMAX_SERVICE, svcInvoker);
@@ -622,6 +739,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
 
         return wimaxStateTracker;
     }
+
     /**
      * Sets the preferred network.
      * @param preference the new preference
@@ -629,7 +747,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
     public void setNetworkPreference(int preference) {
         enforceChangePermission();
 
-        mHandler.sendMessage(mHandler.obtainMessage(EVENT_SET_NETWORK_PREFERENCE, preference, 0));
+        mHandler.sendMessage(
+                mHandler.obtainMessage(EVENT_SET_NETWORK_PREFERENCE, preference, 0));
     }
 
     public int getNetworkPreference() {
@@ -647,7 +766,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
                 mNetConfigs[preference].isDefault()) {
             if (mNetworkPreference != preference) {
                 final ContentResolver cr = mContext.getContentResolver();
-                Settings.Secure.putInt(cr, Settings.Secure.NETWORK_PREFERENCE, preference);
+                Settings.Global.putInt(cr, Settings.Global.NETWORK_PREFERENCE, preference);
                 synchronized(this) {
                     mNetworkPreference = preference;
                 }
@@ -661,22 +780,19 @@ private NetworkStateTracker makeWimaxStateTracker() {
 
         /** Check system properties for the default value then use secure settings value, if any. */
         int defaultDelay = SystemProperties.getInt(
-                "conn." + Settings.Secure.CONNECTIVITY_CHANGE_DELAY,
-                Settings.Secure.CONNECTIVITY_CHANGE_DELAY_DEFAULT);
-        return Settings.Secure.getInt(cr, Settings.Secure.CONNECTIVITY_CHANGE_DELAY,
+                "conn." + Settings.Global.CONNECTIVITY_CHANGE_DELAY,
+                ConnectivityManager.CONNECTIVITY_CHANGE_DELAY_DEFAULT);
+        return Settings.Global.getInt(cr, Settings.Global.CONNECTIVITY_CHANGE_DELAY,
                 defaultDelay);
     }
 
     private int getPersistedNetworkPreference() {
         final ContentResolver cr = mContext.getContentResolver();
 
-        final int networkPrefSetting = Settings.Secure
-                .getInt(cr, Settings.Secure.NETWORK_PREFERENCE, -1);
-        if (networkPrefSetting != -1) {
-            return networkPrefSetting;
-        }
+        final int networkPrefSetting = Settings.Global
+                .getInt(cr, Settings.Global.NETWORK_PREFERENCE, -1);
 
-        return ConnectivityManager.DEFAULT_NETWORK_PREFERENCE;
+        return networkPrefSetting;
     }
 
     /**
@@ -748,6 +864,9 @@ private NetworkStateTracker makeWimaxStateTracker() {
             info = new NetworkInfo(info);
             info.setDetailedState(DetailedState.BLOCKED, null, null);
         }
+        if (mLockdownTracker != null) {
+            info = mLockdownTracker.augmentNetworkInfo(info);
+        }
         return info;
     }
 
@@ -763,6 +882,17 @@ private NetworkStateTracker makeWimaxStateTracker() {
         enforceAccessPermission();
         final int uid = Binder.getCallingUid();
         return getNetworkInfo(mActiveDefaultNetwork, uid);
+    }
+
+    public NetworkInfo getActiveNetworkInfoUnfiltered() {
+        enforceAccessPermission();
+        if (isNetworkTypeValid(mActiveDefaultNetwork)) {
+            final NetworkStateTracker tracker = mNetTrackers[mActiveDefaultNetwork];
+            if (tracker != null) {
+                return tracker.getNetworkInfo();
+            }
+        }
+        return null;
     }
 
     @Override
@@ -922,6 +1052,14 @@ private NetworkStateTracker makeWimaxStateTracker() {
         return tracker != null && tracker.setRadio(turnOn);
     }
 
+    private INetworkManagementEventObserver mDataActivityObserver = new BaseNetworkObserver() {
+        @Override
+        public void interfaceClassDataActivityChanged(String label, boolean active) {
+            int deviceType = Integer.parseInt(label);
+            sendDataActivityBroadcast(deviceType, active);
+        }
+    };
+
     /**
      * Used to notice when the calling process dies so we can self-expire
      *
@@ -1008,13 +1146,19 @@ private NetworkStateTracker makeWimaxStateTracker() {
         try {
             if (!ConnectivityManager.isNetworkTypeValid(networkType) ||
                     mNetConfigs[networkType] == null) {
-                return Phone.APN_REQUEST_FAILED;
+                return PhoneConstants.APN_REQUEST_FAILED;
             }
 
             FeatureUser f = new FeatureUser(networkType, feature, binder);
 
             // TODO - move this into individual networktrackers
             int usedNetworkType = convertFeatureToNetworkType(networkType, feature);
+
+            if (mLockdownEnabled) {
+                // Since carrier APNs usually aren't available from VPN
+                // endpoint, mark them as unavailable.
+                return PhoneConstants.APN_TYPE_NOT_AVAILABLE;
+            }
 
             if (mProtectedNetworks.contains(usedNetworkType)) {
                 enforceConnectivityInternalPermission();
@@ -1027,7 +1171,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
                 uidRules = mUidRules.get(Binder.getCallingUid(), RULE_ALLOW_ALL);
             }
             if (networkMetered && (uidRules & RULE_REJECT_METERED) != 0) {
-                return Phone.APN_REQUEST_FAILED;
+                return PhoneConstants.APN_REQUEST_FAILED;
             }
 
             NetworkStateTracker network = mNetTrackers[usedNetworkType];
@@ -1039,7 +1183,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
                     if (ni.isAvailable() == false) {
                         if (!TextUtils.equals(feature,Phone.FEATURE_ENABLE_DUN_ALWAYS)) {
                             if (DBG) log("special network not available ni=" + ni.getTypeName());
-                            return Phone.APN_TYPE_NOT_AVAILABLE;
+                            return PhoneConstants.APN_TYPE_NOT_AVAILABLE;
                         } else {
                             // else make the attempt anyway - probably giving REQUEST_STARTED below
                             if (DBG) {
@@ -1088,10 +1232,10 @@ private NetworkStateTracker makeWimaxStateTracker() {
                             } finally {
                                 Binder.restoreCallingIdentity(token);
                             }
-                            return Phone.APN_ALREADY_ACTIVE;
+                            return PhoneConstants.APN_ALREADY_ACTIVE;
                         }
                         if (VDBG) log("special network already connecting");
-                        return Phone.APN_REQUEST_STARTED;
+                        return PhoneConstants.APN_REQUEST_STARTED;
                     }
 
                     // check if the radio in play can make another contact
@@ -1101,8 +1245,11 @@ private NetworkStateTracker makeWimaxStateTracker() {
                         log("startUsingNetworkFeature reconnecting to " + networkType + ": " +
                                 feature);
                     }
-                    network.reconnect();
-                    return Phone.APN_REQUEST_STARTED;
+                    if (network.reconnect()) {
+                        return PhoneConstants.APN_REQUEST_STARTED;
+                    } else {
+                        return PhoneConstants.APN_REQUEST_FAILED;
+                    }
                 } else {
                     // need to remember this unsupported request so we respond appropriately on stop
                     synchronized(this) {
@@ -1115,7 +1262,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
                     return -1;
                 }
             }
-            return Phone.APN_TYPE_NOT_AVAILABLE;
+            return PhoneConstants.APN_TYPE_NOT_AVAILABLE;
          } finally {
             if (DBG) {
                 final long execTime = SystemClock.elapsedRealtime() - startTime;
@@ -1221,7 +1368,14 @@ private NetworkStateTracker makeWimaxStateTracker() {
             if (usedNetworkType != networkType) {
                 Integer currentPid = new Integer(pid);
                 mNetRequestersPids[usedNetworkType].remove(currentPid);
-                reassessPidDns(pid, true);
+
+                final long token = Binder.clearCallingIdentity();
+                try {
+                    reassessPidDns(pid, true);
+                } finally {
+                    Binder.restoreCallingIdentity(token);
+                }
+                flushVmDnsCache();
                 if (mNetRequestersPids[usedNetworkType].size() != 0) {
                     if (VDBG) {
                         log("stopUsingNetworkFeature: net " + networkType + ": " + feature +
@@ -1290,12 +1444,18 @@ private NetworkStateTracker makeWimaxStateTracker() {
             return false;
         }
         NetworkStateTracker tracker = mNetTrackers[networkType];
+        DetailedState netState = tracker.getNetworkInfo().getDetailedState();
 
-        if (tracker == null || !tracker.getNetworkInfo().isConnected() ||
+        if (tracker == null || (netState != DetailedState.CONNECTED &&
+                netState != DetailedState.CAPTIVE_PORTAL_CHECK) ||
                 tracker.isTeardownRequested()) {
             if (VDBG) {
-                log("requestRouteToHostAddress on down network " +
-                           "(" + networkType + ") - dropped");
+                log("requestRouteToHostAddress on down network "
+                        + "(" + networkType + ") - dropped"
+                        + " tracker=" + tracker
+                        + " netState=" + netState
+                        + " isTeardownRequested="
+                            + ((tracker != null) ? tracker.isTeardownRequested() : "tracker:null"));
             }
             return false;
         }
@@ -1303,21 +1463,24 @@ private NetworkStateTracker makeWimaxStateTracker() {
         try {
             InetAddress addr = InetAddress.getByAddress(hostAddress);
             LinkProperties lp = tracker.getLinkProperties();
-            return addRouteToAddress(lp, addr);
+            boolean ok = addRouteToAddress(lp, addr);
+            if (DBG) log("requestRouteToHostAddress ok=" + ok);
+            return ok;
         } catch (UnknownHostException e) {
             if (DBG) log("requestRouteToHostAddress got " + e.toString());
         } finally {
             Binder.restoreCallingIdentity(token);
         }
+        if (DBG) log("requestRouteToHostAddress X bottom return false");
         return false;
     }
 
     private boolean addRoute(LinkProperties p, RouteInfo r, boolean toDefaultTable) {
-        return modifyRoute(p.getInterfaceName(), p, r, 0, ADD, toDefaultTable);
+        return modifyRoute(p, r, 0, ADD, toDefaultTable);
     }
 
     private boolean removeRoute(LinkProperties p, RouteInfo r, boolean toDefaultTable) {
-        return modifyRoute(p.getInterfaceName(), p, r, 0, REMOVE, toDefaultTable);
+        return modifyRoute(p, r, 0, REMOVE, toDefaultTable);
     }
 
     private boolean addRouteToAddress(LinkProperties lp, InetAddress addr) {
@@ -1330,26 +1493,27 @@ private NetworkStateTracker makeWimaxStateTracker() {
 
     private boolean modifyRouteToAddress(LinkProperties lp, InetAddress addr, boolean doAdd,
             boolean toDefaultTable) {
-        RouteInfo bestRoute = RouteInfo.selectBestRoute(lp.getRoutes(), addr);
+        RouteInfo bestRoute = RouteInfo.selectBestRoute(lp.getAllRoutes(), addr);
         if (bestRoute == null) {
-            bestRoute = RouteInfo.makeHostRoute(addr);
+            bestRoute = RouteInfo.makeHostRoute(addr, lp.getInterfaceName());
         } else {
+            String iface = bestRoute.getInterface();
             if (bestRoute.getGateway().equals(addr)) {
                 // if there is no better route, add the implied hostroute for our gateway
-                bestRoute = RouteInfo.makeHostRoute(addr);
+                bestRoute = RouteInfo.makeHostRoute(addr, iface);
             } else {
                 // if we will connect to this through another route, add a direct route
                 // to it's gateway
-                bestRoute = RouteInfo.makeHostRoute(addr, bestRoute.getGateway());
+                bestRoute = RouteInfo.makeHostRoute(addr, bestRoute.getGateway(), iface);
             }
         }
-        return modifyRoute(lp.getInterfaceName(), lp, bestRoute, 0, doAdd, toDefaultTable);
+        return modifyRoute(lp, bestRoute, 0, doAdd, toDefaultTable);
     }
 
-    private boolean modifyRoute(String ifaceName, LinkProperties lp, RouteInfo r, int cycleCount,
-            boolean doAdd, boolean toDefaultTable) {
-        if ((ifaceName == null) || (lp == null) || (r == null)) {
-            if (DBG) log("modifyRoute got unexpected null: " + ifaceName + ", " + lp + ", " + r);
+    private boolean modifyRoute(LinkProperties lp, RouteInfo r, int cycleCount, boolean doAdd,
+            boolean toDefaultTable) {
+        if ((lp == null) || (r == null)) {
+            if (DBG) log("modifyRoute got unexpected null: " + lp + ", " + r);
             return false;
         }
 
@@ -1358,18 +1522,25 @@ private NetworkStateTracker makeWimaxStateTracker() {
             return false;
         }
 
-        if (r.isHostRoute() == false) {
-            RouteInfo bestRoute = RouteInfo.selectBestRoute(lp.getRoutes(), r.getGateway());
+        String ifaceName = r.getInterface();
+        if(ifaceName == null) {
+            loge("Error modifying route - no interface name");
+            return false;
+        }
+        if (r.hasGateway()) {
+            RouteInfo bestRoute = RouteInfo.selectBestRoute(lp.getAllRoutes(), r.getGateway());
             if (bestRoute != null) {
                 if (bestRoute.getGateway().equals(r.getGateway())) {
                     // if there is no better route, add the implied hostroute for our gateway
-                    bestRoute = RouteInfo.makeHostRoute(r.getGateway());
+                    bestRoute = RouteInfo.makeHostRoute(r.getGateway(), ifaceName);
                 } else {
                     // if we will connect to our gateway through another route, add a direct
                     // route to it's gateway
-                    bestRoute = RouteInfo.makeHostRoute(r.getGateway(), bestRoute.getGateway());
+                    bestRoute = RouteInfo.makeHostRoute(r.getGateway(),
+                                                        bestRoute.getGateway(),
+                                                        ifaceName);
                 }
-                modifyRoute(ifaceName, lp, bestRoute, cycleCount+1, doAdd, toDefaultTable);
+                modifyRoute(lp, bestRoute, cycleCount+1, doAdd, toDefaultTable);
             }
         }
         if (doAdd) {
@@ -1425,8 +1596,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
         //       which is where we store the value and maybe make this
         //       asynchronous.
         enforceAccessPermission();
-        boolean retVal = Settings.Secure.getInt(mContext.getContentResolver(),
-                Settings.Secure.MOBILE_DATA, 1) == 1;
+        boolean retVal = Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.MOBILE_DATA, 1) == 1;
         if (VDBG) log("getMobileDataEnabled returning " + retVal);
         return retVal;
     }
@@ -1590,6 +1761,10 @@ private NetworkStateTracker makeWimaxStateTracker() {
         int prevNetType = info.getType();
 
         mNetTrackers[prevNetType].setTeardownRequested(false);
+
+        // Remove idletimer previously setup in {@code handleConnect}
+        removeDataActivityTracking(prevNetType);
+
         /*
          * If the disconnected network is not the active one, then don't report
          * this as a loss of connectivity. What probably happened is that we're
@@ -1597,9 +1772,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
          * in accordance with network preference policies.
          */
         if (!mNetConfigs[prevNetType].isDefault()) {
-            List pids = mNetRequestersPids[prevNetType];
-            for (int i = 0; i<pids.size(); i++) {
-                Integer pid = (Integer)pids.get(i);
+            List<Integer> pids = mNetRequestersPids[prevNetType];
+            for (Integer pid : pids) {
                 // will remove them because the net's no longer connected
                 // need to do this now as only now do we know the pids and
                 // can properly null things that are no longer referenced.
@@ -1608,7 +1782,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
         }
 
         Intent intent = new Intent(ConnectivityManager.CONNECTIVITY_ACTION);
-        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_INFO, info);
+        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_INFO, new NetworkInfo(info));
+        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_TYPE, info.getType());
         if (info.isFailover()) {
             intent.putExtra(ConnectivityManager.EXTRA_IS_FAILOVER, true);
             info.setFailover(false);
@@ -1718,7 +1893,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
         }
     }
 
-    private void sendConnectedBroadcast(NetworkInfo info) {
+    public void sendConnectedBroadcast(NetworkInfo info) {
+        enforceConnectivityInternalPermission();
         sendGeneralBroadcast(info, CONNECTIVITY_ACTION_IMMEDIATE);
         sendGeneralBroadcast(info, CONNECTIVITY_ACTION);
     }
@@ -1733,8 +1909,13 @@ private NetworkStateTracker makeWimaxStateTracker() {
     }
 
     private Intent makeGeneralIntent(NetworkInfo info, String bcastType) {
+        if (mLockdownTracker != null) {
+            info = mLockdownTracker.augmentNetworkInfo(info);
+        }
+
         Intent intent = new Intent(bcastType);
-        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_INFO, info);
+        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_INFO, new NetworkInfo(info));
+        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_TYPE, info.getType());
         if (info.isFailover()) {
             intent.putExtra(ConnectivityManager.EXTRA_IS_FAILOVER, true);
             info.setFailover(false);
@@ -1758,6 +1939,19 @@ private NetworkStateTracker makeWimaxStateTracker() {
         sendStickyBroadcastDelayed(makeGeneralIntent(info, bcastType), delayMs);
     }
 
+    private void sendDataActivityBroadcast(int deviceType, boolean active) {
+        Intent intent = new Intent(ConnectivityManager.ACTION_DATA_ACTIVITY_CHANGE);
+        intent.putExtra(ConnectivityManager.EXTRA_DEVICE_TYPE, deviceType);
+        intent.putExtra(ConnectivityManager.EXTRA_IS_ACTIVE, active);
+        final long ident = Binder.clearCallingIdentity();
+        try {
+            mContext.sendOrderedBroadcastAsUser(intent, UserHandle.ALL,
+                    RECEIVE_DATA_ACTIVITY_CHANGE, null, null, 0, null, null);
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+    }
+
     /**
      * Called when an attempt to fail over to another network has failed.
      * @param info the {@link NetworkInfo} for the failed network
@@ -1777,7 +1971,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
         loge("Attempt to connect to " + info.getTypeName() + " failed" + reasonText);
 
         Intent intent = new Intent(ConnectivityManager.CONNECTIVITY_ACTION);
-        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_INFO, info);
+        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_INFO, new NetworkInfo(info));
+        intent.putExtra(ConnectivityManager.EXTRA_NETWORK_TYPE, info.getType());
         if (getActiveNetworkInfo() == null) {
             intent.putExtra(ConnectivityManager.EXTRA_NO_CONNECTIVITY, true);
         }
@@ -1828,7 +2023,12 @@ private NetworkStateTracker makeWimaxStateTracker() {
                 log("sendStickyBroadcast: action=" + intent.getAction());
             }
 
-            mContext.sendStickyBroadcast(intent);
+            final long ident = Binder.clearCallingIdentity();
+            try {
+                mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+            } finally {
+                Binder.restoreCallingIdentity(ident);
+            }
         }
     }
 
@@ -1849,37 +2049,55 @@ private NetworkStateTracker makeWimaxStateTracker() {
         synchronized(this) {
             mSystemReady = true;
             if (mInitialBroadcast != null) {
-                mContext.sendStickyBroadcast(mInitialBroadcast);
+                mContext.sendStickyBroadcastAsUser(mInitialBroadcast, UserHandle.ALL);
                 mInitialBroadcast = null;
             }
         }
         // load the global proxy at startup
         mHandler.sendMessage(mHandler.obtainMessage(EVENT_APPLY_GLOBAL_HTTP_PROXY));
+
+        // Try bringing up tracker, but if KeyStore isn't ready yet, wait
+        // for user to unlock device.
+        if (!updateLockdownVpn()) {
+            final IntentFilter filter = new IntentFilter(Intent.ACTION_USER_PRESENT);
+            mContext.registerReceiver(mUserPresentReceiver, filter);
+        }
+    }
+
+    private BroadcastReceiver mUserPresentReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // Try creating lockdown tracker, since user present usually means
+            // unlocked keystore.
+            if (updateLockdownVpn()) {
+                mContext.unregisterReceiver(this);
+            }
+        }
+    };
+
+    private boolean isNewNetTypePreferredOverCurrentNetType(int type) {
+        if ((type != mNetworkPreference &&
+                    mNetConfigs[mActiveDefaultNetwork].priority >
+                    mNetConfigs[type].priority) ||
+                mNetworkPreference == mActiveDefaultNetwork) return false;
+        return true;
     }
 
     private void handleConnect(NetworkInfo info) {
-        final int type = info.getType();
+        final int newNetType = info.getType();
+
+        setupDataActivityTracking(newNetType);
 
         // snapshot isFailover, because sendConnectedBroadcast() resets it
         boolean isFailover = info.isFailover();
-        final NetworkStateTracker thisNet = mNetTrackers[type];
+        final NetworkStateTracker thisNet = mNetTrackers[newNetType];
+        final String thisIface = thisNet.getLinkProperties().getInterfaceName();
 
         // if this is a default net and other default is running
         // kill the one not preferred
-        if (mNetConfigs[type].isDefault()) {
-            if (mActiveDefaultNetwork != -1 && mActiveDefaultNetwork != type) {
-                if ((type != mNetworkPreference &&
-                        mNetConfigs[mActiveDefaultNetwork].priority >
-                        mNetConfigs[type].priority) ||
-                        mNetworkPreference == mActiveDefaultNetwork) {
-                        // don't accept this one
-                        if (VDBG) {
-                            log("Not broadcasting CONNECT_ACTION " +
-                                "to torn down network " + info.getTypeName());
-                        }
-                        teardown(thisNet);
-                        return;
-                } else {
+        if (mNetConfigs[newNetType].isDefault()) {
+            if (mActiveDefaultNetwork != -1 && mActiveDefaultNetwork != newNetType) {
+                if (isNewNetTypePreferredOverCurrentNetType(newNetType)) {
                     // tear down the other
                     NetworkStateTracker otherNet =
                             mNetTrackers[mActiveDefaultNetwork];
@@ -1892,6 +2110,14 @@ private NetworkStateTracker makeWimaxStateTracker() {
                         teardown(thisNet);
                         return;
                     }
+                } else {
+                       // don't accept this one
+                        if (VDBG) {
+                            log("Not broadcasting CONNECT_ACTION " +
+                                "to torn down network " + info.getTypeName());
+                        }
+                        teardown(thisNet);
+                        return;
                 }
             }
             synchronized (ConnectivityService.this) {
@@ -1905,7 +2131,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
                             1000);
                 }
             }
-            mActiveDefaultNetwork = type;
+            mActiveDefaultNetwork = newNetType;
             // this will cause us to come up initially as unconnected and switching
             // to connected after our normal pause unless somebody reports us as reall
             // disconnected
@@ -1917,16 +2143,94 @@ private NetworkStateTracker makeWimaxStateTracker() {
         }
         thisNet.setTeardownRequested(false);
         updateNetworkSettings(thisNet);
-        handleConnectivityChange(type, false);
+        handleConnectivityChange(newNetType, false);
         sendConnectedBroadcastDelayed(info, getConnectivityChangeDelay());
 
         // notify battery stats service about this network
-        final String iface = thisNet.getLinkProperties().getInterfaceName();
-        if (iface != null) {
+        if (thisIface != null) {
             try {
-                BatteryStatsService.getService().noteNetworkInterfaceType(iface, type);
+                BatteryStatsService.getService().noteNetworkInterfaceType(thisIface, newNetType);
             } catch (RemoteException e) {
                 // ignored; service lives in system_server
+            }
+        }
+    }
+
+    private void handleCaptivePortalTrackerCheck(NetworkInfo info) {
+        if (DBG) log("Captive portal check " + info);
+        int type = info.getType();
+        final NetworkStateTracker thisNet = mNetTrackers[type];
+        if (mNetConfigs[type].isDefault()) {
+            if (mActiveDefaultNetwork != -1 && mActiveDefaultNetwork != type) {
+                if (isNewNetTypePreferredOverCurrentNetType(type)) {
+                    if (DBG) log("Captive check on " + info.getTypeName());
+                    mCaptivePortalTracker.detectCaptivePortal(new NetworkInfo(info));
+                    return;
+                } else {
+                    if (DBG) log("Tear down low priority net " + info.getTypeName());
+                    teardown(thisNet);
+                    return;
+                }
+            }
+        }
+
+        thisNet.captivePortalCheckComplete();
+    }
+
+    /** @hide */
+    public void captivePortalCheckComplete(NetworkInfo info) {
+        enforceConnectivityInternalPermission();
+        mNetTrackers[info.getType()].captivePortalCheckComplete();
+    }
+
+    /**
+     * Setup data activity tracking for the given network interface.
+     *
+     * Every {@code setupDataActivityTracking} should be paired with a
+     * {@link removeDataActivityTracking} for cleanup.
+     */
+    private void setupDataActivityTracking(int type) {
+        final NetworkStateTracker thisNet = mNetTrackers[type];
+        final String iface = thisNet.getLinkProperties().getInterfaceName();
+
+        final int timeout;
+
+        if (ConnectivityManager.isNetworkTypeMobile(type)) {
+            timeout = Settings.Global.getInt(mContext.getContentResolver(),
+                                             Settings.Global.DATA_ACTIVITY_TIMEOUT_MOBILE,
+                                             0);
+            // Canonicalize mobile network type
+            type = ConnectivityManager.TYPE_MOBILE;
+        } else if (ConnectivityManager.TYPE_WIFI == type) {
+            timeout = Settings.Global.getInt(mContext.getContentResolver(),
+                                             Settings.Global.DATA_ACTIVITY_TIMEOUT_WIFI,
+                                             0);
+        } else {
+            // do not track any other networks
+            timeout = 0;
+        }
+
+        if (timeout > 0 && iface != null) {
+            try {
+                mNetd.addIdleTimer(iface, timeout, Integer.toString(type));
+            } catch (RemoteException e) {
+            }
+        }
+    }
+
+    /**
+     * Remove data activity tracking when network disconnects.
+     */
+    private void removeDataActivityTracking(int type) {
+        final NetworkStateTracker net = mNetTrackers[type];
+        final String iface = net.getLinkProperties().getInterfaceName();
+
+        if (iface != null && (ConnectivityManager.isNetworkTypeMobile(type) ||
+                              ConnectivityManager.TYPE_WIFI == type)) {
+            try {
+                // the call fails silently if no idletimer setup for this interface
+                mNetd.removeIdleTimer(iface);
+            } catch (RemoteException e) {
             }
         }
     }
@@ -2006,30 +2310,52 @@ private NetworkStateTracker makeWimaxStateTracker() {
         boolean resetDns = updateRoutes(newLp, curLp, mNetConfigs[netType].isDefault());
 
         if (resetMask != 0 || resetDns) {
-            LinkProperties linkProperties = mNetTrackers[netType].getLinkProperties();
-            if (linkProperties != null) {
-                String iface = linkProperties.getInterfaceName();
-                if (TextUtils.isEmpty(iface) == false) {
-                    if (resetMask != 0) {
-                        if (DBG) log("resetConnections(" + iface + ", " + resetMask + ")");
-                        NetworkUtils.resetConnections(iface, resetMask);
+            if (curLp != null) {
+                for (String iface : curLp.getAllInterfaceNames()) {
+                    if (TextUtils.isEmpty(iface) == false) {
+                        if (resetMask != 0) {
+                            if (DBG) log("resetConnections(" + iface + ", " + resetMask + ")");
+                            NetworkUtils.resetConnections(iface, resetMask);
 
-                        // Tell VPN the interface is down. It is a temporary
-                        // but effective fix to make VPN aware of the change.
-                        if ((resetMask & NetworkUtils.RESET_IPV4_ADDRESSES) != 0) {
-                            mVpn.interfaceStatusChanged(iface, false);
+                            // Tell VPN the interface is down. It is a temporary
+                            // but effective fix to make VPN aware of the change.
+                            if ((resetMask & NetworkUtils.RESET_IPV4_ADDRESSES) != 0) {
+                                mVpn.interfaceStatusChanged(iface, false);
+                            }
                         }
-                    }
-                    if (resetDns) {
-                        if (VDBG) log("resetting DNS cache for " + iface);
-                        try {
-                            mNetd.flushInterfaceDnsCache(iface);
-                        } catch (Exception e) {
-                            // never crash - catch them all
-                            if (DBG) loge("Exception resetting dns cache: " + e);
+                        if (resetDns) {
+                            flushVmDnsCache();
+                            if (VDBG) log("resetting DNS cache for " + iface);
+                            try {
+                                mNetd.flushInterfaceDnsCache(iface);
+                            } catch (Exception e) {
+                                // never crash - catch them all
+                                if (DBG) loge("Exception resetting dns cache: " + e);
+                            }
                         }
+                    } else {
+                        loge("Can't reset connection for type "+netType);
                     }
                 }
+            }
+        }
+
+        // Update 464xlat state.
+        NetworkStateTracker tracker = mNetTrackers[netType];
+        if (mClat.requiresClat(netType, tracker)) {
+            // If the connection was previously using clat, but is not using it now, stop the clat
+            // daemon. Normally, this happens automatically when the connection disconnects, but if
+            // the disconnect is not reported, or if the connection's LinkProperties changed for
+            // some other reason (e.g., handoff changes the IP addresses on the link), it would
+            // still be running. If it's not running, then stopping it is a no-op.
+            if (Nat464Xlat.isRunningClat(curLp) && !Nat464Xlat.isRunningClat(newLp)) {
+                mClat.stopClat();
+            }
+            // If the link requires clat to be running, then start the daemon now.
+            if (mNetTrackers[netType].getNetworkInfo().isConnected()) {
+                mClat.startClat(tracker);
+            } else {
+                mClat.stopClat();
             }
         }
 
@@ -2037,7 +2363,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
         //       @see bug/4455071
         /** Notify TetheringService if interface name has been changed. */
         if (TextUtils.equals(mNetTrackers[netType].getNetworkInfo().getReason(),
-                             Phone.REASON_LINK_PROPERTIES_CHANGED)) {
+                             PhoneConstants.REASON_LINK_PROPERTIES_CHANGED)) {
             if (isTetheringSupported()) {
                 mTethering.handleTetherIfaceChange();
             }
@@ -2062,7 +2388,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
             routeDiff = curLp.compareRoutes(newLp);
             dnsDiff = curLp.compareDnses(newLp);
         } else if (newLp != null) {
-            routeDiff.added = newLp.getRoutes();
+            routeDiff.added = newLp.getAllRoutes();
             dnsDiff.added = newLp.getDnses();
         }
 
@@ -2075,28 +2401,6 @@ private NetworkStateTracker makeWimaxStateTracker() {
             if (isLinkDefault == false) {
                 // remove from a secondary route table
                 removeRoute(curLp, r, TO_SECONDARY_TABLE);
-            }
-        }
-
-        for (RouteInfo r :  routeDiff.added) {
-            if (isLinkDefault || ! r.isDefaultRoute()) {
-                addRoute(newLp, r, TO_DEFAULT_TABLE);
-            } else {
-                // add to a secondary route table
-                addRoute(newLp, r, TO_SECONDARY_TABLE);
-
-                // many radios add a default route even when we don't want one.
-                // remove the default route unless somebody else has asked for it
-                String ifaceName = newLp.getInterfaceName();
-                if (TextUtils.isEmpty(ifaceName) == false && mAddedRoutes.contains(r) == false) {
-                    if (VDBG) log("Removing " + r + " for interface " + ifaceName);
-                    try {
-                        mNetd.removeRoute(ifaceName, r);
-                    } catch (Exception e) {
-                        // never crash - catch them all
-                        if (DBG) loge("Exception trying to remove a route: " + e);
-                    }
-                }
             }
         }
 
@@ -2124,6 +2428,29 @@ private NetworkStateTracker makeWimaxStateTracker() {
                 }
             }
         }
+
+        for (RouteInfo r :  routeDiff.added) {
+            if (isLinkDefault || ! r.isDefaultRoute()) {
+                addRoute(newLp, r, TO_DEFAULT_TABLE);
+            } else {
+                // add to a secondary route table
+                addRoute(newLp, r, TO_SECONDARY_TABLE);
+
+                // many radios add a default route even when we don't want one.
+                // remove the default route unless somebody else has asked for it
+                String ifaceName = newLp.getInterfaceName();
+                if (TextUtils.isEmpty(ifaceName) == false && mAddedRoutes.contains(r) == false) {
+                    if (VDBG) log("Removing " + r + " for interface " + ifaceName);
+                    try {
+                        mNetd.removeRoute(ifaceName, r);
+                    } catch (Exception e) {
+                        // never crash - catch them all
+                        if (DBG) loge("Exception trying to remove a route: " + e);
+                    }
+                }
+            }
+        }
+
         return routesChanged;
     }
 
@@ -2133,11 +2460,11 @@ private NetworkStateTracker makeWimaxStateTracker() {
      * net.tcp.buffersize.[default|wifi|umts|edge|gprs] and set them for system
      * wide use
      */
-   public void updateNetworkSettings(NetworkStateTracker nt) {
+   private void updateNetworkSettings(NetworkStateTracker nt) {
         String key = nt.getTcpBufferSizesPropName();
-        String bufferSizes = SystemProperties.get(key);
+        String bufferSizes = key == null ? null : SystemProperties.get(key);
 
-        if (bufferSizes.length() == 0) {
+        if (TextUtils.isEmpty(bufferSizes)) {
             if (VDBG) log(key + " not found in system properties. Using defaults");
 
             // Setting to default values so we won't be stuck to previous values
@@ -2187,9 +2514,10 @@ private NetworkStateTracker makeWimaxStateTracker() {
      * on the highest priority active net which this process requested.
      * If there aren't any, clear it out
      */
-    private void reassessPidDns(int myPid, boolean doBump)
+    private void reassessPidDns(int pid, boolean doBump)
     {
-        if (VDBG) log("reassessPidDns for pid " + myPid);
+        if (VDBG) log("reassessPidDns for pid " + pid);
+        Integer myPid = new Integer(pid);
         for(int i : mPriorityList) {
             if (mNetConfigs[i].isDefault()) {
                 continue;
@@ -2199,61 +2527,25 @@ private NetworkStateTracker makeWimaxStateTracker() {
                     !nt.isTeardownRequested()) {
                 LinkProperties p = nt.getLinkProperties();
                 if (p == null) continue;
-                List pids = mNetRequestersPids[i];
-                for (int j=0; j<pids.size(); j++) {
-                    Integer pid = (Integer)pids.get(j);
-                    if (pid.intValue() == myPid) {
-                        Collection<InetAddress> dnses = p.getDnses();
-                        writePidDns(dnses, myPid);
-                        if (doBump) {
-                            bumpDns();
-                        }
-                        return;
+                if (mNetRequestersPids[i].contains(myPid)) {
+                    try {
+                        mNetd.setDnsInterfaceForPid(p.getInterfaceName(), pid);
+                    } catch (Exception e) {
+                        Slog.e(TAG, "exception reasseses pid dns: " + e);
                     }
+                    return;
                 }
            }
         }
         // nothing found - delete
-        for (int i = 1; ; i++) {
-            String prop = "net.dns" + i + "." + myPid;
-            if (SystemProperties.get(prop).length() == 0) {
-                if (doBump) {
-                    bumpDns();
-                }
-                return;
-            }
-            SystemProperties.set(prop, "");
+        try {
+            mNetd.clearDnsInterfaceForPid(pid);
+        } catch (Exception e) {
+            Slog.e(TAG, "exception clear interface from pid: " + e);
         }
     }
 
-    // return true if results in a change
-    private boolean writePidDns(Collection <InetAddress> dnses, int pid) {
-        int j = 1;
-        boolean changed = false;
-        for (InetAddress dns : dnses) {
-            String dnsString = dns.getHostAddress();
-            if (changed || !dnsString.equals(SystemProperties.get("net.dns" + j + "." + pid))) {
-                changed = true;
-                SystemProperties.set("net.dns" + j + "." + pid, dns.getHostAddress());
-            }
-            j++;
-        }
-        return changed;
-    }
-
-    private void bumpDns() {
-        /*
-         * Bump the property that tells the name resolver library to reread
-         * the DNS server list from the properties.
-         */
-        String propVal = SystemProperties.get("net.dnschange");
-        int n = 0;
-        if (propVal.length() != 0) {
-            try {
-                n = Integer.parseInt(propVal);
-            } catch (NumberFormatException e) {}
-        }
-        SystemProperties.set("net.dnschange", "" + (n+1));
+    private void flushVmDnsCache() {
         /*
          * Tell the VMs to toss their DNS caches
          */
@@ -2263,60 +2555,43 @@ private NetworkStateTracker makeWimaxStateTracker() {
          * Connectivity events can happen before boot has completed ...
          */
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-        mContext.sendBroadcast(intent);
+        final long ident = Binder.clearCallingIdentity();
+        try {
+            mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
     }
 
     // Caller must grab mDnsLock.
-    private boolean updateDns(String network, String iface,
+    private void updateDnsLocked(String network, String iface,
             Collection<InetAddress> dnses, String domains) {
-        boolean changed = false;
         int last = 0;
         if (dnses.size() == 0 && mDefaultDns != null) {
-            ++last;
-            String value = mDefaultDns.getHostAddress();
-            if (!value.equals(SystemProperties.get("net.dns1"))) {
-                if (DBG) {
-                    loge("no dns provided for " + network + " - using " + value);
-                }
-                changed = true;
-                SystemProperties.set("net.dns1", value);
+            dnses = new ArrayList();
+            dnses.add(mDefaultDns);
+            if (DBG) {
+                loge("no dns provided for " + network + " - using " + mDefaultDns.getHostAddress());
             }
-        } else {
+        }
+
+        try {
+            mNetd.setDnsServersForInterface(iface, NetworkUtils.makeStrings(dnses), domains);
+            mNetd.setDefaultInterfaceForDns(iface);
             for (InetAddress dns : dnses) {
                 ++last;
                 String key = "net.dns" + last;
                 String value = dns.getHostAddress();
-                if (!changed && value.equals(SystemProperties.get(key))) {
-                    continue;
-                }
-                if (VDBG) {
-                    log("adding dns " + value + " for " + network);
-                }
-                changed = true;
                 SystemProperties.set(key, value);
             }
-        }
-        for (int i = last + 1; i <= mNumDnsEntries; ++i) {
-            String key = "net.dns" + i;
-            if (VDBG) log("erasing " + key);
-            changed = true;
-            SystemProperties.set(key, "");
-        }
-        mNumDnsEntries = last;
-
-        if (changed) {
-            try {
-                mNetd.setDnsServersForInterface(iface, NetworkUtils.makeStrings(dnses));
-                mNetd.setDefaultInterfaceForDns(iface);
-            } catch (Exception e) {
-                if (DBG) loge("exception setting default dns interface: " + e);
+            for (int i = last + 1; i <= mNumDnsEntries; ++i) {
+                String key = "net.dns" + i;
+                SystemProperties.set(key, "");
             }
+            mNumDnsEntries = last;
+        } catch (Exception e) {
+            if (DBG) loge("exception setting default dns interface: " + e);
         }
-        if (!domains.equals(SystemProperties.get("net.dns.search"))) {
-            SystemProperties.set("net.dns.search", domains);
-            changed = true;
-        }
-        return changed;
     }
 
     private void handleDnsConfigurationChange(int netType) {
@@ -2326,29 +2601,31 @@ private NetworkStateTracker makeWimaxStateTracker() {
             LinkProperties p = nt.getLinkProperties();
             if (p == null) return;
             Collection<InetAddress> dnses = p.getDnses();
-            boolean changed = false;
             if (mNetConfigs[netType].isDefault()) {
                 String network = nt.getNetworkInfo().getTypeName();
                 synchronized (mDnsLock) {
                     if (!mDnsOverridden) {
-                        changed = updateDns(network, p.getInterfaceName(), dnses, "");
+                        updateDnsLocked(network, p.getInterfaceName(), dnses, p.getDomains());
                     }
                 }
             } else {
                 try {
                     mNetd.setDnsServersForInterface(p.getInterfaceName(),
-                            NetworkUtils.makeStrings(dnses));
+                            NetworkUtils.makeStrings(dnses), p.getDomains());
                 } catch (Exception e) {
                     if (DBG) loge("exception setting dns servers: " + e);
                 }
                 // set per-pid dns for attached secondary nets
-                List pids = mNetRequestersPids[netType];
-                for (int y=0; y< pids.size(); y++) {
-                    Integer pid = (Integer)pids.get(y);
-                    changed = writePidDns(dnses, pid.intValue());
+                List<Integer> pids = mNetRequestersPids[netType];
+                for (Integer pid : pids) {
+                    try {
+                        mNetd.setDnsInterfaceForPid(p.getInterfaceName(), pid);
+                    } catch (Exception e) {
+                        Slog.e(TAG, "exception setting interface for pid: " + e);
+                    }
                 }
             }
-            if (changed) bumpDns();
+            flushVmDnsCache();
         }
     }
 
@@ -2373,7 +2650,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
     }
 
     @Override
-    protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
+    protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
+        final IndentingPrintWriter pw = new IndentingPrintWriter(writer, "  ");
         if (mContext.checkCallingOrSelfPermission(
                 android.Manifest.permission.DUMP)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -2382,34 +2660,45 @@ private NetworkStateTracker makeWimaxStateTracker() {
                     Binder.getCallingUid());
             return;
         }
+
+        // TODO: add locking to get atomic snapshot
         pw.println();
-        for (NetworkStateTracker nst : mNetTrackers) {
+        for (int i = 0; i < mNetTrackers.length; i++) {
+            final NetworkStateTracker nst = mNetTrackers[i];
             if (nst != null) {
+                pw.println("NetworkStateTracker for " + getNetworkTypeName(i) + ":");
+                pw.increaseIndent();
                 if (nst.getNetworkInfo().isConnected()) {
                     pw.println("Active network: " + nst.getNetworkInfo().
                             getTypeName());
                 }
                 pw.println(nst.getNetworkInfo());
+                pw.println(nst.getLinkProperties());
                 pw.println(nst);
                 pw.println();
+                pw.decreaseIndent();
             }
         }
 
         pw.println("Network Requester Pids:");
+        pw.increaseIndent();
         for (int net : mPriorityList) {
             String pidString = net + ": ";
-            for (Object pid : mNetRequestersPids[net]) {
+            for (Integer pid : mNetRequestersPids[net]) {
                 pidString = pidString + pid.toString() + ", ";
             }
             pw.println(pidString);
         }
         pw.println();
+        pw.decreaseIndent();
 
         pw.println("FeatureUsers:");
+        pw.increaseIndent();
         for (Object requester : mFeatureUsers) {
             pw.println(requester.toString());
         }
         pw.println();
+        pw.decreaseIndent();
 
         synchronized (this) {
             pw.println("NetworkTranstionWakeLock is currently " +
@@ -2423,15 +2712,17 @@ private NetworkStateTracker makeWimaxStateTracker() {
         if (mInetLog != null) {
             pw.println();
             pw.println("Inet condition reports:");
+            pw.increaseIndent();
             for(int i = 0; i < mInetLog.size(); i++) {
                 pw.println(mInetLog.get(i));
             }
+            pw.decreaseIndent();
         }
     }
 
     // must be stateless - things change under us.
-    private class MyHandler extends Handler {
-        public MyHandler(Looper looper) {
+    private class NetworkStateTrackerHandler extends Handler {
+        public NetworkStateTrackerHandler(Looper looper) {
             super(looper);
         }
 
@@ -2451,22 +2742,26 @@ private NetworkStateTracker makeWimaxStateTracker() {
                             state + "/" + info.getDetailedState());
                     }
 
-                    // Connectivity state changed:
-                    // [31-14] Reserved for future use
-                    // [13-10] Network subtype (for mobile network, as defined
-                    //         by TelephonyManager)
-                    // [9-4] Detailed state ordinal (as defined by
-                    //         NetworkInfo.DetailedState)
-                    // [3-0] Network type (as defined by ConnectivityManager)
-                    int eventLogParam = (info.getType() & 0xf) |
-                            ((info.getDetailedState().ordinal() & 0x3f) << 4) |
-                            (info.getSubtype() << 10);
-                    EventLog.writeEvent(EventLogTags.CONNECTIVITY_STATE_CHANGED,
-                            eventLogParam);
+                    // After booting we'll check once for mobile provisioning
+                    // if we've provisioned by and connected.
+                    if (!mFirstProvisioningCheckStarted
+                            && (0 != Settings.Global.getInt(mContext.getContentResolver(),
+                                        Settings.Global.DEVICE_PROVISIONED, 0))
+                            && (state == NetworkInfo.State.CONNECTED)) {
+                        log("check provisioning after booting");
+                        mFirstProvisioningCheckStarted = true;
+                        checkMobileProvisioning(true, CheckMp.MAX_TIMEOUT_MS, null);
+                    }
+
+                    EventLogTags.writeConnectivityStateChanged(
+                            info.getType(), info.getSubtype(), info.getDetailedState().ordinal());
 
                     if (info.getDetailedState() ==
                             NetworkInfo.DetailedState.FAILED) {
                         handleConnectionFailure(info);
+                    } else if (info.getDetailedState() ==
+                            DetailedState.CAPTIVE_PORTAL_CHECK) {
+                        handleCaptivePortalTrackerCheck(info);
                     } else if (state == NetworkInfo.State.DISCONNECTED) {
                         handleDisconnect(info);
                     } else if (state == NetworkInfo.State.SUSPENDED) {
@@ -2481,6 +2776,9 @@ private NetworkStateTracker makeWimaxStateTracker() {
                     } else if (state == NetworkInfo.State.CONNECTED) {
                         handleConnect(info);
                     }
+                    if (mLockdownTracker != null) {
+                        mLockdownTracker.onNetworkInfoChanged(info);
+                    }
                     break;
                 case NetworkStateTracker.EVENT_CONFIGURATION_CHANGED:
                     info = (NetworkInfo) msg.obj;
@@ -2489,6 +2787,24 @@ private NetworkStateTracker makeWimaxStateTracker() {
                     //       @see bug/4455071
                     handleConnectivityChange(info.getType(), false);
                     break;
+                case NetworkStateTracker.EVENT_NETWORK_SUBTYPE_CHANGED:
+                    info = (NetworkInfo) msg.obj;
+                    type = info.getType();
+                    updateNetworkSettings(mNetTrackers[type]);
+                    break;
+            }
+        }
+    }
+
+    private class InternalHandler extends Handler {
+        public InternalHandler(Looper looper) {
+            super(looper);
+        }
+
+        @Override
+        public void handleMessage(Message msg) {
+            NetworkInfo info;
+            switch (msg.what) {
                 case EVENT_CLEAR_NET_TRANSITION_WAKELOCK:
                     String causedBy = null;
                     synchronized (ConnectivityService.this) {
@@ -2560,6 +2876,26 @@ private NetworkStateTracker makeWimaxStateTracker() {
                     final int networkType = msg.arg1;
                     final boolean enabled = msg.arg2 == ENABLED;
                     handleSetPolicyDataEnable(networkType, enabled);
+                    break;
+                }
+                case EVENT_VPN_STATE_CHANGED: {
+                    if (mLockdownTracker != null) {
+                        mLockdownTracker.onVpnStateChanged((NetworkInfo) msg.obj);
+                    }
+                    break;
+                }
+                case EVENT_ENABLE_FAIL_FAST_MOBILE_DATA: {
+                    int tag = mEnableFailFastMobileDataTag.get();
+                    if (msg.arg1 == tag) {
+                        MobileDataStateTracker mobileDst =
+                            (MobileDataStateTracker) mNetTrackers[ConnectivityManager.TYPE_MOBILE];
+                        if (mobileDst != null) {
+                            mobileDst.setEnableFailFastMobileData(msg.arg2);
+                        }
+                    } else {
+                        log("EVENT_ENABLE_FAIL_FAST_MOBILE_DATA: stale arg1:" + msg.arg1
+                                + " != tag:" + tag);
+                    }
                 }
             }
         }
@@ -2627,7 +2963,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
     }
 
     public int setUsbTethering(boolean enable) {
-        enforceTetherAccessPermission();
+        enforceTetherChangePermission();
         if (isTetheringSupported()) {
             return mTethering.setUsbTethering(enable);
         } else {
@@ -2664,8 +3000,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
     public boolean isTetheringSupported() {
         enforceTetherAccessPermission();
         int defaultVal = (SystemProperties.get("ro.tether.denied").equals("true") ? 0 : 1);
-        boolean tetherEnabledInSettings = (Settings.Secure.getInt(mContext.getContentResolver(),
-                Settings.Secure.TETHER_SUPPORTED, defaultVal) != 0);
+        boolean tetherEnabledInSettings = (Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.TETHER_SUPPORTED, defaultVal) != 0);
         return tetherEnabledInSettings && mTetheringConfigValid;
     }
 
@@ -2731,11 +3067,11 @@ private NetworkStateTracker makeWimaxStateTracker() {
             if (VDBG) log("handleInetConditionChange: starting a change hold");
             // setup a new hold to debounce this
             if (mDefaultInetCondition > 50) {
-                delay = Settings.Secure.getInt(mContext.getContentResolver(),
-                        Settings.Secure.INET_CONDITION_DEBOUNCE_UP_DELAY, 500);
+                delay = Settings.Global.getInt(mContext.getContentResolver(),
+                        Settings.Global.INET_CONDITION_DEBOUNCE_UP_DELAY, 500);
             } else {
-                delay = Settings.Secure.getInt(mContext.getContentResolver(),
-                Settings.Secure.INET_CONDITION_DEBOUNCE_DOWN_DELAY, 3000);
+                delay = Settings.Global.getInt(mContext.getContentResolver(),
+                        Settings.Global.INET_CONDITION_DEBOUNCE_DOWN_DELAY, 3000);
             }
             mInetConditionChangeInFlight = true;
             mHandler.sendMessageDelayed(mHandler.obtainMessage(EVENT_INET_CONDITION_HOLD_END,
@@ -2780,14 +3116,19 @@ private NetworkStateTracker makeWimaxStateTracker() {
     }
 
     public ProxyProperties getProxy() {
-        synchronized (mDefaultProxyLock) {
-            return mDefaultProxyDisabled ? null : mDefaultProxy;
+        // this information is already available as a world read/writable jvm property
+        // so this API change wouldn't have a benifit.  It also breaks the passing
+        // of proxy info to all the JVMs.
+        // enforceAccessPermission();
+        synchronized (mProxyLock) {
+            if (mGlobalProxy != null) return mGlobalProxy;
+            return (mDefaultProxyDisabled ? null : mDefaultProxy);
         }
     }
 
     public void setGlobalProxy(ProxyProperties proxyProperties) {
-        enforceChangePermission();
-        synchronized (mGlobalProxyLock) {
+        enforceConnectivityInternalPermission();
+        synchronized (mProxyLock) {
             if (proxyProperties == mGlobalProxy) return;
             if (proxyProperties != null && proxyProperties.equals(mGlobalProxy)) return;
             if (mGlobalProxy != null && mGlobalProxy.equals(proxyProperties)) return;
@@ -2804,34 +3145,43 @@ private NetworkStateTracker makeWimaxStateTracker() {
                 mGlobalProxy = null;
             }
             ContentResolver res = mContext.getContentResolver();
-            Settings.Secure.putString(res, Settings.Secure.GLOBAL_HTTP_PROXY_HOST, host);
-            Settings.Secure.putInt(res, Settings.Secure.GLOBAL_HTTP_PROXY_PORT, port);
-            Settings.Secure.putString(res, Settings.Secure.GLOBAL_HTTP_PROXY_EXCLUSION_LIST,
-                    exclList);
+            final long token = Binder.clearCallingIdentity();
+            try {
+                Settings.Global.putString(res, Settings.Global.GLOBAL_HTTP_PROXY_HOST, host);
+                Settings.Global.putInt(res, Settings.Global.GLOBAL_HTTP_PROXY_PORT, port);
+                Settings.Global.putString(res, Settings.Global.GLOBAL_HTTP_PROXY_EXCLUSION_LIST,
+                        exclList);
+            } finally {
+                Binder.restoreCallingIdentity(token);
+            }
         }
 
         if (mGlobalProxy == null) {
             proxyProperties = mDefaultProxy;
         }
-        //sendProxyBroadcast(proxyProperties);
+        sendProxyBroadcast(proxyProperties);
     }
 
     private void loadGlobalProxy() {
         ContentResolver res = mContext.getContentResolver();
-        String host = Settings.Secure.getString(res, Settings.Secure.GLOBAL_HTTP_PROXY_HOST);
-        int port = Settings.Secure.getInt(res, Settings.Secure.GLOBAL_HTTP_PROXY_PORT, 0);
-        String exclList = Settings.Secure.getString(res,
-                Settings.Secure.GLOBAL_HTTP_PROXY_EXCLUSION_LIST);
+        String host = Settings.Global.getString(res, Settings.Global.GLOBAL_HTTP_PROXY_HOST);
+        int port = Settings.Global.getInt(res, Settings.Global.GLOBAL_HTTP_PROXY_PORT, 0);
+        String exclList = Settings.Global.getString(res,
+                Settings.Global.GLOBAL_HTTP_PROXY_EXCLUSION_LIST);
         if (!TextUtils.isEmpty(host)) {
             ProxyProperties proxyProperties = new ProxyProperties(host, port, exclList);
-            synchronized (mGlobalProxyLock) {
+            synchronized (mProxyLock) {
                 mGlobalProxy = proxyProperties;
             }
         }
     }
 
     public ProxyProperties getGlobalProxy() {
-        synchronized (mGlobalProxyLock) {
+        // this information is already available as a world read/writable jvm property
+        // so this API change wouldn't have a benifit.  It also breaks the passing
+        // of proxy info to all the JVMs.
+        // enforceAccessPermission();
+        synchronized (mProxyLock) {
             return mGlobalProxy;
         }
     }
@@ -2840,11 +3190,12 @@ private NetworkStateTracker makeWimaxStateTracker() {
         if (proxy != null && TextUtils.isEmpty(proxy.getHost())) {
             proxy = null;
         }
-        synchronized (mDefaultProxyLock) {
+        synchronized (mProxyLock) {
             if (mDefaultProxy != null && mDefaultProxy.equals(proxy)) return;
-            if (mDefaultProxy == proxy) return;
+            if (mDefaultProxy == proxy) return; // catches repeated nulls
             mDefaultProxy = proxy;
 
+            if (mGlobalProxy != null) return;
             if (!mDefaultProxyDisabled) {
                 sendProxyBroadcast(proxy);
             }
@@ -2852,8 +3203,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
     }
 
     private void handleDeprecatedGlobalHttpProxy() {
-        String proxy = Settings.Secure.getString(mContext.getContentResolver(),
-                Settings.Secure.HTTP_PROXY);
+        String proxy = Settings.Global.getString(mContext.getContentResolver(),
+                Settings.Global.HTTP_PROXY);
         if (!TextUtils.isEmpty(proxy)) {
             String data[] = proxy.split(":");
             String proxyHost =  data[0];
@@ -2877,7 +3228,12 @@ private NetworkStateTracker makeWimaxStateTracker() {
         intent.addFlags(Intent.FLAG_RECEIVER_REPLACE_PENDING |
             Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(Proxy.EXTRA_PROXY_INFO, proxy);
-        mContext.sendStickyBroadcast(intent);
+        final long ident = Binder.clearCallingIdentity();
+        try {
+            mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
     }
 
     private static class SettingsObserver extends ContentObserver {
@@ -2891,8 +3247,8 @@ private NetworkStateTracker makeWimaxStateTracker() {
 
         void observe(Context context) {
             ContentResolver resolver = context.getContentResolver();
-            resolver.registerContentObserver(Settings.Secure.getUriFor(
-                    Settings.Secure.HTTP_PROXY), false, this);
+            resolver.registerContentObserver(Settings.Global.getUriFor(
+                    Settings.Global.HTTP_PROXY), false, this);
         }
 
         @Override
@@ -2901,11 +3257,11 @@ private NetworkStateTracker makeWimaxStateTracker() {
         }
     }
 
-    private void log(String s) {
+    private static void log(String s) {
         Slog.d(TAG, s);
     }
 
-    private void loge(String s) {
+    private static void loge(String s) {
         Slog.e(TAG, s);
     }
 
@@ -2958,9 +3314,10 @@ private NetworkStateTracker makeWimaxStateTracker() {
      */
     @Override
     public boolean protectVpn(ParcelFileDescriptor socket) {
+        throwIfLockdownEnabled();
         try {
             int type = mActiveDefaultNetwork;
-            if (ConnectivityManager.isNetworkTypeValid(type)) {
+            if (ConnectivityManager.isNetworkTypeValid(type) && mNetTrackers[type] != null) {
                 mVpn.protect(socket, mNetTrackers[type].getLinkProperties().getInterfaceName());
                 return true;
             }
@@ -2984,6 +3341,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
      */
     @Override
     public boolean prepareVpn(String oldPackage, String newPackage) {
+        throwIfLockdownEnabled();
         return mVpn.prepare(oldPackage, newPackage);
     }
 
@@ -2996,18 +3354,22 @@ private NetworkStateTracker makeWimaxStateTracker() {
      */
     @Override
     public ParcelFileDescriptor establishVpn(VpnConfig config) {
+        throwIfLockdownEnabled();
         return mVpn.establish(config);
     }
 
     /**
-     * Start legacy VPN and return an intent to VpnDialogs. This method is
-     * used by VpnSettings and not available in ConnectivityManager.
-     * Permissions are checked in Vpn class.
-     * @hide
+     * Start legacy VPN, controlling native daemons as needed. Creates a
+     * secondary thread to perform connection work, returning quickly.
      */
     @Override
-    public void startLegacyVpn(VpnConfig config, String[] racoon, String[] mtpd) {
-        mVpn.startLegacyVpn(config, racoon, mtpd);
+    public void startLegacyVpn(VpnProfile profile) {
+        throwIfLockdownEnabled();
+        final LinkProperties egress = getActiveLinkProperties();
+        if (egress == null) {
+            throw new IllegalStateException("Missing active network connection");
+        }
+        mVpn.startLegacyVpn(profile, mKeyStore, egress);
     }
 
     /**
@@ -3018,6 +3380,7 @@ private NetworkStateTracker makeWimaxStateTracker() {
      */
     @Override
     public LegacyVpnInfo getLegacyVpnInfo() {
+        throwIfLockdownEnabled();
         return mVpn.getLegacyVpnInfo();
     }
 
@@ -3032,8 +3395,11 @@ private NetworkStateTracker makeWimaxStateTracker() {
      * be done whenever a better abstraction is developed.
      */
     public class VpnCallback {
-
         private VpnCallback() {
+        }
+
+        public void onStateChanged(NetworkInfo info) {
+            mHandler.obtainMessage(EVENT_VPN_STATE_CHANGED, info).sendToTarget();
         }
 
         public void override(List<String> dnsServers, List<String> searchDomains) {
@@ -3067,19 +3433,15 @@ private NetworkStateTracker makeWimaxStateTracker() {
             String domains = buffer.toString().trim();
 
             // Apply DNS changes.
-            boolean changed = false;
             synchronized (mDnsLock) {
-                changed = updateDns("VPN", "VPN", addresses, domains);
+                updateDnsLocked("VPN", "VPN", addresses, domains);
                 mDnsOverridden = true;
             }
-            if (changed) {
-                bumpDns();
-            }
 
-            // Temporarily disable the default proxy.
-            synchronized (mDefaultProxyLock) {
+            // Temporarily disable the default proxy (not global).
+            synchronized (mProxyLock) {
                 mDefaultProxyDisabled = true;
-                if (mDefaultProxy != null) {
+                if (mGlobalProxy == null && mDefaultProxy != null) {
                     sendProxyBroadcast(null);
                 }
             }
@@ -3094,12 +3456,667 @@ private NetworkStateTracker makeWimaxStateTracker() {
                     mHandler.sendEmptyMessage(EVENT_RESTORE_DNS);
                 }
             }
-            synchronized (mDefaultProxyLock) {
+            synchronized (mProxyLock) {
                 mDefaultProxyDisabled = false;
-                if (mDefaultProxy != null) {
+                if (mGlobalProxy == null && mDefaultProxy != null) {
                     sendProxyBroadcast(mDefaultProxy);
                 }
             }
         }
+    }
+
+    @Override
+    public boolean updateLockdownVpn() {
+        if (Binder.getCallingUid() != Process.SYSTEM_UID) {
+            Slog.w(TAG, "Lockdown VPN only available to AID_SYSTEM");
+            return false;
+        }
+
+        // Tear down existing lockdown if profile was removed
+        mLockdownEnabled = LockdownVpnTracker.isEnabled();
+        if (mLockdownEnabled) {
+            if (!mKeyStore.isUnlocked()) {
+                Slog.w(TAG, "KeyStore locked; unable to create LockdownTracker");
+                return false;
+            }
+
+            final String profileName = new String(mKeyStore.get(Credentials.LOCKDOWN_VPN));
+            final VpnProfile profile = VpnProfile.decode(
+                    profileName, mKeyStore.get(Credentials.VPN + profileName));
+            setLockdownTracker(new LockdownVpnTracker(mContext, mNetd, this, mVpn, profile));
+        } else {
+            setLockdownTracker(null);
+        }
+
+        return true;
+    }
+
+    /**
+     * Internally set new {@link LockdownVpnTracker}, shutting down any existing
+     * {@link LockdownVpnTracker}. Can be {@code null} to disable lockdown.
+     */
+    private void setLockdownTracker(LockdownVpnTracker tracker) {
+        // Shutdown any existing tracker
+        final LockdownVpnTracker existing = mLockdownTracker;
+        mLockdownTracker = null;
+        if (existing != null) {
+            existing.shutdown();
+        }
+
+        try {
+            if (tracker != null) {
+                mNetd.setFirewallEnabled(true);
+                mNetd.setFirewallInterfaceRule("lo", true);
+                mLockdownTracker = tracker;
+                mLockdownTracker.init();
+            } else {
+                mNetd.setFirewallEnabled(false);
+            }
+        } catch (RemoteException e) {
+            // ignored; NMS lives inside system_server
+        }
+    }
+
+    private void throwIfLockdownEnabled() {
+        if (mLockdownEnabled) {
+            throw new IllegalStateException("Unavailable in lockdown mode");
+        }
+    }
+
+    public void supplyMessenger(int networkType, Messenger messenger) {
+        enforceConnectivityInternalPermission();
+
+        if (isNetworkTypeValid(networkType) && mNetTrackers[networkType] != null) {
+            mNetTrackers[networkType].supplyMessenger(messenger);
+        }
+    }
+
+    public int findConnectionTypeForIface(String iface) {
+        enforceConnectivityInternalPermission();
+
+        if (TextUtils.isEmpty(iface)) return ConnectivityManager.TYPE_NONE;
+        for (NetworkStateTracker tracker : mNetTrackers) {
+            if (tracker != null) {
+                LinkProperties lp = tracker.getLinkProperties();
+                if (lp != null && iface.equals(lp.getInterfaceName())) {
+                    return tracker.getNetworkInfo().getType();
+                }
+            }
+        }
+        return ConnectivityManager.TYPE_NONE;
+    }
+
+    /**
+     * Have mobile data fail fast if enabled.
+     *
+     * @param enabled DctConstants.ENABLED/DISABLED
+     */
+    private void setEnableFailFastMobileData(int enabled) {
+        int tag;
+
+        if (enabled == DctConstants.ENABLED) {
+            tag = mEnableFailFastMobileDataTag.incrementAndGet();
+        } else {
+            tag = mEnableFailFastMobileDataTag.get();
+        }
+        mHandler.sendMessage(mHandler.obtainMessage(EVENT_ENABLE_FAIL_FAST_MOBILE_DATA, tag,
+                         enabled));
+    }
+
+    @Override
+    public int checkMobileProvisioning(boolean sendNotification, int suggestedTimeOutMs,
+            final ResultReceiver resultReceiver) {
+        log("checkMobileProvisioning: E sendNotification=" + sendNotification
+                + " suggestedTimeOutMs=" + suggestedTimeOutMs
+                + " resultReceiver=" + resultReceiver);
+        enforceChangePermission();
+
+        mFirstProvisioningCheckStarted = true;
+
+        int timeOutMs = suggestedTimeOutMs;
+        if (suggestedTimeOutMs > CheckMp.MAX_TIMEOUT_MS) {
+            timeOutMs = CheckMp.MAX_TIMEOUT_MS;
+        }
+
+        // Check that mobile networks are supported
+        if (!isNetworkSupported(ConnectivityManager.TYPE_MOBILE)
+                || !isNetworkSupported(ConnectivityManager.TYPE_MOBILE_HIPRI)) {
+            log("checkMobileProvisioning: X no mobile network");
+            if (resultReceiver != null) {
+                resultReceiver.send(ConnectivityManager.CMP_RESULT_CODE_NO_CONNECTION, null);
+            }
+            return timeOutMs;
+        }
+
+        final long token = Binder.clearCallingIdentity();
+        try {
+            CheckMp checkMp = new CheckMp(mContext, this);
+            CheckMp.CallBack cb = new CheckMp.CallBack() {
+                @Override
+                void onComplete(Integer result) {
+                    log("CheckMp.onComplete: result=" + result);
+                    if (resultReceiver != null) {
+                        log("CheckMp.onComplete: send result");
+                        resultReceiver.send(result, null);
+                    }
+                    NetworkInfo ni =
+                            mNetTrackers[ConnectivityManager.TYPE_MOBILE_HIPRI].getNetworkInfo();
+                    switch(result) {
+                        case ConnectivityManager.CMP_RESULT_CODE_CONNECTABLE:
+                        case ConnectivityManager.CMP_RESULT_CODE_NO_CONNECTION: {
+                            log("CheckMp.onComplete: ignore, connected or no connection");
+                            break;
+                        }
+                        case ConnectivityManager.CMP_RESULT_CODE_REDIRECTED: {
+                            log("CheckMp.onComplete: warm sim");
+                            String url = getMobileProvisioningUrl();
+                            if (TextUtils.isEmpty(url)) {
+                                url = getMobileRedirectedProvisioningUrl();
+                            }
+                            if (TextUtils.isEmpty(url) == false) {
+                                log("CheckMp.onComplete: warm sim (redirected), url=" + url);
+                                setNotificationVisible(true, ni, url);
+                            } else {
+                                log("CheckMp.onComplete: warm sim (redirected), no url");
+                            }
+                            break;
+                        }
+                        case ConnectivityManager.CMP_RESULT_CODE_NO_DNS:
+                        case ConnectivityManager.CMP_RESULT_CODE_NO_TCP_CONNECTION: {
+                            String url = getMobileProvisioningUrl();
+                            if (TextUtils.isEmpty(url) == false) {
+                                log("CheckMp.onComplete: warm sim (no dns/tcp), url=" + url);
+                                setNotificationVisible(true, ni, url);
+                            } else {
+                                log("CheckMp.onComplete: warm sim (no dns/tcp), no url");
+                            }
+                            break;
+                        }
+                        default: {
+                            loge("CheckMp.onComplete: ignore unexpected result=" + result);
+                            break;
+                        }
+                    }
+                }
+            };
+            CheckMp.Params params =
+                    new CheckMp.Params(checkMp.getDefaultUrl(), timeOutMs, cb);
+            log("checkMobileProvisioning: params=" + params);
+            setNotificationVisible(false, null, null);
+            checkMp.execute(params);
+        } finally {
+            Binder.restoreCallingIdentity(token);
+            log("checkMobileProvisioning: X");
+        }
+        return timeOutMs;
+    }
+
+    static class CheckMp extends
+            AsyncTask<CheckMp.Params, Void, Integer> {
+        private static final String CHECKMP_TAG = "CheckMp";
+        public static final int MAX_TIMEOUT_MS =  60000;
+        private static final int SOCKET_TIMEOUT_MS = 5000;
+        private Context mContext;
+        private ConnectivityService mCs;
+        private TelephonyManager mTm;
+        private Params mParams;
+
+        /**
+         * Parameters for AsyncTask.execute
+         */
+        static class Params {
+            private String mUrl;
+            private long mTimeOutMs;
+            private CallBack mCb;
+
+            Params(String url, long timeOutMs, CallBack cb) {
+                mUrl = url;
+                mTimeOutMs = timeOutMs;
+                mCb = cb;
+            }
+
+            @Override
+            public String toString() {
+                return "{" + " url=" + mUrl + " mTimeOutMs=" + mTimeOutMs + " mCb=" + mCb + "}";
+            }
+        }
+
+        /**
+         * The call back object passed in Params. onComplete will be called
+         * on the main thread.
+         */
+        abstract static class CallBack {
+            // Called on the main thread.
+            abstract void onComplete(Integer result);
+        }
+
+        public CheckMp(Context context, ConnectivityService cs) {
+            mContext = context;
+            mCs = cs;
+
+            // Setup access to TelephonyService we'll be using.
+            mTm = (TelephonyManager) mContext.getSystemService(
+                    Context.TELEPHONY_SERVICE);
+        }
+
+        /**
+         * Get the default url to use for the test.
+         */
+        public String getDefaultUrl() {
+            // See http://go/clientsdns for usage approval
+            String server = Settings.Global.getString(mContext.getContentResolver(),
+                    Settings.Global.CAPTIVE_PORTAL_SERVER);
+            if (server == null) {
+                server = "clients3.google.com";
+            }
+            return "http://" + server + "/generate_204";
+        }
+
+        /**
+         * Detect if its possible to connect to the http url. DNS based detection techniques
+         * do not work at all hotspots. The best way to check is to perform a request to
+         * a known address that fetches the data we expect.
+         */
+        private synchronized Integer isMobileOk(Params params) {
+            Integer result = ConnectivityManager.CMP_RESULT_CODE_NO_CONNECTION;
+            Uri orgUri = Uri.parse(params.mUrl);
+            Random rand = new Random();
+            mParams = params;
+
+            try {
+                if (mCs.isNetworkSupported(ConnectivityManager.TYPE_MOBILE) == false) {
+                    log("isMobileOk: not mobile capable");
+                    result = ConnectivityManager.CMP_RESULT_CODE_NO_CONNECTION;
+                    return result;
+                }
+
+                // Enable fail fast as we'll do retries here and use a
+                // hipri connection so the default connection stays active.
+                log("isMobileOk: start hipri url=" + params.mUrl);
+                mCs.setEnableFailFastMobileData(DctConstants.ENABLED);
+                mCs.startUsingNetworkFeature(ConnectivityManager.TYPE_MOBILE,
+                        Phone.FEATURE_ENABLE_HIPRI, new Binder());
+
+                // Continue trying to connect until time has run out
+                long endTime = SystemClock.elapsedRealtime() + params.mTimeOutMs;
+                while(SystemClock.elapsedRealtime() < endTime) {
+                    try {
+                        // Wait for hipri to connect.
+                        // TODO: Don't poll and handle situation where hipri fails
+                        // because default is retrying. See b/9569540
+                        NetworkInfo.State state = mCs
+                                .getNetworkInfo(ConnectivityManager.TYPE_MOBILE_HIPRI).getState();
+                        if (state != NetworkInfo.State.CONNECTED) {
+                            log("isMobileOk: not connected ni=" +
+                                    mCs.getNetworkInfo(ConnectivityManager.TYPE_MOBILE_HIPRI));
+                            sleep(1);
+                            result = ConnectivityManager.CMP_RESULT_CODE_NO_CONNECTION;
+                            continue;
+                        }
+
+                        // Get of the addresses associated with the url host. We need to use the
+                        // address otherwise HttpURLConnection object will use the name to get
+                        // the addresses and is will try every address but that will bypass the
+                        // route to host we setup and the connection could succeed as the default
+                        // interface might be connected to the internet via wifi or other interface.
+                        InetAddress[] addresses;
+                        try {
+                            addresses = InetAddress.getAllByName(orgUri.getHost());
+                        } catch (UnknownHostException e) {
+                            log("isMobileOk: UnknownHostException");
+                            result = ConnectivityManager.CMP_RESULT_CODE_NO_DNS;
+                            return result;
+                        }
+                        log("isMobileOk: addresses=" + inetAddressesToString(addresses));
+
+                        // Get the type of addresses supported by this link
+                        LinkProperties lp = mCs.getLinkProperties(
+                                ConnectivityManager.TYPE_MOBILE_HIPRI);
+                        boolean linkHasIpv4 = hasIPv4Address(lp);
+                        boolean linkHasIpv6 = hasIPv6Address(lp);
+                        log("isMobileOk: linkHasIpv4=" + linkHasIpv4
+                                + " linkHasIpv6=" + linkHasIpv6);
+
+                        // Loop through at most 3 valid addresses or all of the address or until
+                        // we run out of time
+                        int loops = Math.min(3, addresses.length);
+                        for(int validAddr=0, addrTried=0;
+                                    (validAddr < loops) && (addrTried < addresses.length)
+                                      && (SystemClock.elapsedRealtime() < endTime);
+                                addrTried ++) {
+
+                            // Choose the address at random but make sure its type is supported
+                            InetAddress hostAddr = addresses[rand.nextInt(addresses.length)];
+                            if (((hostAddr instanceof Inet4Address) && linkHasIpv4)
+                                    || ((hostAddr instanceof Inet6Address) && linkHasIpv6)) {
+                                // Valid address, so use it
+                                validAddr += 1;
+                            } else {
+                                // Invalid address so try next address
+                                continue;
+                            }
+
+                            // Make a route to host so we check the specific interface.
+                            if (mCs.requestRouteToHostAddress(ConnectivityManager.TYPE_MOBILE_HIPRI,
+                                    hostAddr.getAddress())) {
+                                // Wait a short time to be sure the route is established ??
+                                log("isMobileOk:"
+                                        + " wait to establish route to hostAddr=" + hostAddr);
+                                sleep(3);
+                            } else {
+                                log("isMobileOk:"
+                                        + " could not establish route to hostAddr=" + hostAddr);
+                                continue;
+                            }
+
+                            // Rewrite the url to have numeric address to use the specific route.
+                            // I also set the "Connection" to "Close" as by default "Keep-Alive"
+                            // is used which is useless in this case.
+                            URL newUrl = new URL(orgUri.getScheme() + "://"
+                                    + hostAddr.getHostAddress() + orgUri.getPath());
+                            log("isMobileOk: newUrl=" + newUrl);
+
+                            HttpURLConnection urlConn = null;
+                            try {
+                                // Open the connection set the request header and get the response
+                                urlConn = (HttpURLConnection) newUrl.openConnection(
+                                        java.net.Proxy.NO_PROXY);
+                                urlConn.setInstanceFollowRedirects(false);
+                                urlConn.setConnectTimeout(SOCKET_TIMEOUT_MS);
+                                urlConn.setReadTimeout(SOCKET_TIMEOUT_MS);
+                                urlConn.setUseCaches(false);
+                                urlConn.setAllowUserInteraction(false);
+                                urlConn.setRequestProperty("Connection", "close");
+                                int responseCode = urlConn.getResponseCode();
+                                if (responseCode == 204) {
+                                    result = ConnectivityManager.CMP_RESULT_CODE_CONNECTABLE;
+                                } else {
+                                    result = ConnectivityManager.CMP_RESULT_CODE_REDIRECTED;
+                                }
+                                log("isMobileOk: connected responseCode=" + responseCode);
+                                urlConn.disconnect();
+                                urlConn = null;
+                                return result;
+                            } catch (Exception e) {
+                                log("isMobileOk: HttpURLConnection Exception e=" + e);
+                                if (urlConn != null) {
+                                    urlConn.disconnect();
+                                    urlConn = null;
+                                }
+                            }
+                        }
+                        result = ConnectivityManager.CMP_RESULT_CODE_NO_TCP_CONNECTION;
+                        log("isMobileOk: loops|timed out");
+                        return result;
+                    } catch (Exception e) {
+                        log("isMobileOk: Exception e=" + e);
+                        continue;
+                    }
+                }
+                log("isMobileOk: timed out");
+            } finally {
+                log("isMobileOk: F stop hipri");
+                mCs.setEnableFailFastMobileData(DctConstants.DISABLED);
+                mCs.stopUsingNetworkFeature(ConnectivityManager.TYPE_MOBILE,
+                        Phone.FEATURE_ENABLE_HIPRI);
+                log("isMobileOk: X result=" + result);
+            }
+            return result;
+        }
+
+        @Override
+        protected Integer doInBackground(Params... params) {
+            return isMobileOk(params[0]);
+        }
+
+        @Override
+        protected void onPostExecute(Integer result) {
+            log("onPostExecute: result=" + result);
+            if ((mParams != null) && (mParams.mCb != null)) {
+                mParams.mCb.onComplete(result);
+            }
+        }
+
+        private String inetAddressesToString(InetAddress[] addresses) {
+            StringBuffer sb = new StringBuffer();
+            boolean firstTime = true;
+            for(InetAddress addr : addresses) {
+                if (firstTime) {
+                    firstTime = false;
+                } else {
+                    sb.append(",");
+                }
+                sb.append(addr);
+            }
+            return sb.toString();
+        }
+
+        private void printNetworkInfo() {
+            boolean hasIccCard = mTm.hasIccCard();
+            int simState = mTm.getSimState();
+            log("hasIccCard=" + hasIccCard
+                    + " simState=" + simState);
+            NetworkInfo[] ni = mCs.getAllNetworkInfo();
+            if (ni != null) {
+                log("ni.length=" + ni.length);
+                for (NetworkInfo netInfo: ni) {
+                    log("netInfo=" + netInfo.toString());
+                }
+            } else {
+                log("no network info ni=null");
+            }
+        }
+
+        /**
+         * Sleep for a few seconds then return.
+         * @param seconds
+         */
+        private static void sleep(int seconds) {
+            try {
+                Thread.sleep(seconds * 1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public boolean hasIPv4Address(LinkProperties lp) {
+            return lp.hasIPv4Address();
+        }
+
+        // Not implemented in LinkProperties, do it here.
+        public boolean hasIPv6Address(LinkProperties lp) {
+            for (LinkAddress address : lp.getLinkAddresses()) {
+              if (address.getAddress() instanceof Inet6Address) {
+                return true;
+              }
+            }
+            return false;
+        }
+
+        private void log(String s) {
+            Slog.d(ConnectivityService.TAG, "[" + CHECKMP_TAG + "] " + s);
+        }
+    }
+
+    private static final String NOTIFICATION_ID = "CaptivePortal.Notification";
+
+    private void setNotificationVisible(boolean visible, NetworkInfo networkInfo, String url) {
+        log("setNotificationVisible: E visible=" + visible + " ni=" + networkInfo + " url=" + url);
+
+        Resources r = Resources.getSystem();
+        NotificationManager notificationManager = (NotificationManager) mContext
+            .getSystemService(Context.NOTIFICATION_SERVICE);
+
+        if (visible) {
+            CharSequence title;
+            CharSequence details;
+            int icon;
+            switch (networkInfo.getType()) {
+                case ConnectivityManager.TYPE_WIFI:
+                    log("setNotificationVisible: TYPE_WIFI");
+                    title = r.getString(R.string.wifi_available_sign_in, 0);
+                    details = r.getString(R.string.network_available_sign_in_detailed,
+                            networkInfo.getExtraInfo());
+                    icon = R.drawable.stat_notify_wifi_in_range;
+                    break;
+                case ConnectivityManager.TYPE_MOBILE:
+                case ConnectivityManager.TYPE_MOBILE_HIPRI:
+                    log("setNotificationVisible: TYPE_MOBILE|HIPRI");
+                    title = r.getString(R.string.network_available_sign_in, 0);
+                    // TODO: Change this to pull from NetworkInfo once a printable
+                    // name has been added to it
+                    details = mTelephonyManager.getNetworkOperatorName();
+                    icon = R.drawable.stat_notify_rssi_in_range;
+                    break;
+                default:
+                    log("setNotificationVisible: other type=" + networkInfo.getType());
+                    title = r.getString(R.string.network_available_sign_in, 0);
+                    details = r.getString(R.string.network_available_sign_in_detailed,
+                            networkInfo.getExtraInfo());
+                    icon = R.drawable.stat_notify_rssi_in_range;
+                    break;
+            }
+
+            Notification notification = new Notification();
+            notification.when = 0;
+            notification.icon = icon;
+            notification.flags = Notification.FLAG_AUTO_CANCEL;
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            intent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT |
+                    Intent.FLAG_ACTIVITY_NEW_TASK);
+            notification.contentIntent = PendingIntent.getActivity(mContext, 0, intent, 0);
+            notification.tickerText = title;
+            notification.setLatestEventInfo(mContext, title, details, notification.contentIntent);
+
+            log("setNotificaitionVisible: notify notificaiton=" + notification);
+            notificationManager.notify(NOTIFICATION_ID, 1, notification);
+        } else {
+            log("setNotificaitionVisible: cancel");
+            notificationManager.cancel(NOTIFICATION_ID, 1);
+        }
+        log("setNotificationVisible: X visible=" + visible + " ni=" + networkInfo + " url=" + url);
+    }
+
+    /** Location to an updatable file listing carrier provisioning urls.
+     *  An example:
+     *
+     * <?xml version="1.0" encoding="utf-8"?>
+     *  <provisioningUrls>
+     *   <provisioningUrl mcc="310" mnc="4">http://myserver.com/foo?mdn=%3$s&amp;iccid=%1$s&amp;imei=%2$s</provisioningUrl>
+     *   <redirectedUrl mcc="310" mnc="4">http://www.google.com</redirectedUrl>
+     *  </provisioningUrls>
+     */
+    private static final String PROVISIONING_URL_PATH =
+            "/data/misc/radio/provisioning_urls.xml";
+    private final File mProvisioningUrlFile = new File(PROVISIONING_URL_PATH);
+
+    /** XML tag for root element. */
+    private static final String TAG_PROVISIONING_URLS = "provisioningUrls";
+    /** XML tag for individual url */
+    private static final String TAG_PROVISIONING_URL = "provisioningUrl";
+    /** XML tag for redirected url */
+    private static final String TAG_REDIRECTED_URL = "redirectedUrl";
+    /** XML attribute for mcc */
+    private static final String ATTR_MCC = "mcc";
+    /** XML attribute for mnc */
+    private static final String ATTR_MNC = "mnc";
+
+    private static final int REDIRECTED_PROVISIONING = 1;
+    private static final int PROVISIONING = 2;
+
+    private String getProvisioningUrlBaseFromFile(int type) {
+        FileReader fileReader = null;
+        XmlPullParser parser = null;
+        Configuration config = mContext.getResources().getConfiguration();
+        String tagType;
+
+        switch (type) {
+            case PROVISIONING:
+                tagType = TAG_PROVISIONING_URL;
+                break;
+            case REDIRECTED_PROVISIONING:
+                tagType = TAG_REDIRECTED_URL;
+                break;
+            default:
+                throw new RuntimeException("getProvisioningUrlBaseFromFile: Unexpected parameter " +
+                        type);
+        }
+
+        try {
+            fileReader = new FileReader(mProvisioningUrlFile);
+            parser = Xml.newPullParser();
+            parser.setInput(fileReader);
+            XmlUtils.beginDocument(parser, TAG_PROVISIONING_URLS);
+
+            while (true) {
+                XmlUtils.nextElement(parser);
+
+                String element = parser.getName();
+                if (element == null) break;
+
+                if (element.equals(tagType)) {
+                    String mcc = parser.getAttributeValue(null, ATTR_MCC);
+                    try {
+                        if (mcc != null && Integer.parseInt(mcc) == config.mcc) {
+                            String mnc = parser.getAttributeValue(null, ATTR_MNC);
+                            if (mnc != null && Integer.parseInt(mnc) == config.mnc) {
+                                parser.next();
+                                if (parser.getEventType() == XmlPullParser.TEXT) {
+                                    return parser.getText();
+                                }
+                            }
+                        }
+                    } catch (NumberFormatException e) {
+                        loge("NumberFormatException in getProvisioningUrlBaseFromFile: " + e);
+                    }
+                }
+            }
+            return null;
+        } catch (FileNotFoundException e) {
+            loge("Carrier Provisioning Urls file not found");
+        } catch (XmlPullParserException e) {
+            loge("Xml parser exception reading Carrier Provisioning Urls file: " + e);
+        } catch (IOException e) {
+            loge("I/O exception reading Carrier Provisioning Urls file: " + e);
+        } finally {
+            if (fileReader != null) {
+                try {
+                    fileReader.close();
+                } catch (IOException e) {}
+            }
+        }
+        return null;
+    }
+
+    private String getMobileRedirectedProvisioningUrl() {
+        String url = getProvisioningUrlBaseFromFile(REDIRECTED_PROVISIONING);
+        if (TextUtils.isEmpty(url)) {
+            url = mContext.getResources().getString(R.string.mobile_redirected_provisioning_url);
+        }
+        return url;
+    }
+
+    public String getMobileProvisioningUrl() {
+        enforceConnectivityInternalPermission();
+        String url = getProvisioningUrlBaseFromFile(PROVISIONING);
+        if (TextUtils.isEmpty(url)) {
+            url = mContext.getResources().getString(R.string.mobile_provisioning_url);
+            log("getProvisioningUrl: mobile_provisioining_url from resource =" + url);
+        } else {
+            log("getProvisioningUrl: mobile_provisioning_url from File =" + url);
+        }
+        // populate the iccid, imei and phone number in the provisioning url.
+        if (!TextUtils.isEmpty(url)) {
+            String phoneNumber = mTelephonyManager.getLine1Number();
+            if (TextUtils.isEmpty(phoneNumber)) {
+                phoneNumber = "0000000000";
+            }
+            url = String.format(url,
+                    mTelephonyManager.getSimSerialNumber() /* ICCID */,
+                    mTelephonyManager.getDeviceId() /* IMEI */,
+                    phoneNumber /* Phone numer */);
+        }
+
+        return url;
     }
 }
